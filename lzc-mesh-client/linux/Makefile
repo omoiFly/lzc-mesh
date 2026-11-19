@@ -19,6 +19,7 @@ PROTOCOLS = wlr-layer-shell-unstable-v1 wlr-virtual-pointer-unstable-v1 virtual-
 	wlr-data-control-unstable-v1 ext-data-control-v1 fake-input
 PROTO_H = $(PROTOCOLS:%=build/%-client-protocol.h)
 PROTO_C = $(PROTOCOLS:%=build/%-protocol.c)
+PROTOCOL_NOTICES = protocols/ext-data-control-v1.xml protocols/fake-input.xml protocols/LGPL-2.1-or-later.txt
 SRC = src/main.c src/ui.c src/layout_view.c src/net.c src/lzc.c src/lzc_cli.c src/lzc_http.c src/wl_input.c src/config.c src/clipboard.c src/files.c src/tray.c src/autostart.c src/direct.c src/bluetooth.c src/identity.c src/local_input.c
 OBJ = $(SRC:src/%.c=build/%.o) $(PROTO_C:.c=.o)
 
@@ -43,10 +44,19 @@ build/lzc-mesh: $(OBJ) $(TRANSPORT)
 build:
 	mkdir -p build
 
+build/linux-clipboard-backend-test: $(ROOT)/spec-tests/linux-clipboard-backend.c src/clipboard.c src/*.h $(PROTO_H) \
+		build/ext-data-control-v1-protocol.o build/wlr-data-control-unstable-v1-protocol.o
+	$(CC) $(CFLAGS) -Isrc $(filter %.o,$^) $< $(LDLIBS) \
+		-Wl,--wrap=wl_proxy_marshal_flags -Wl,--wrap=wl_proxy_get_version -o $@
+
+check-clipboard-backend: build/linux-clipboard-backend-test
+	./build/linux-clipboard-backend-test
+
 # Portable archive: binary + desktop entry + icon + install.sh
 dist: build/lzc-mesh
 	rm -rf build/dist && mkdir -p build/dist/lzc-mesh ../dist
 	cp build/lzc-mesh lzc-mesh.desktop lzc-mesh.png install.sh host-bluetooth.py BLUETOOTH.md HCLIENT-CLI.md ../../LICENSE build/dist/lzc-mesh/
+	install -Dm0644 -t build/dist/lzc-mesh/protocols $(PROTOCOL_NOTICES)
 	tar -C build/dist -czf ../dist/lzc-mesh-linux-$(ARCH).tar.gz lzc-mesh
 
 # Installer: Arch Linux package (pacman -U), built with makepkg from this tree
@@ -70,4 +80,4 @@ pkg:
 
 clean:
 	rm -rf build
-.PHONY: all clean dist pkg
+.PHONY: all check-clipboard-backend clean dist pkg
