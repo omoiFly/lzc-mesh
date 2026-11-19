@@ -102,7 +102,7 @@ void net_send_clipboard_setting(bool on) { JsonBuilder *b = msg("settings"); boo
 static void update_clipboard_status(void) {
     if(app.hub_connected && !app.auth_verified)app_set_status(S_CLIPBOARD,ST_UNKNOWN,"设备未获信任，双向剪贴板已停用");
     else if (app.device_ready && !app.device_enabled) app_set_status(S_CLIPBOARD, ST_UNKNOWN, "客户端已关闭，双向剪贴板已停用");
-    else if (!clipboard_available()) app_set_status(S_CLIPBOARD, ST_WARN, "当前合成器不支持 wlr-data-control，无法共享剪贴板");
+    else if (!clipboard_available()) app_set_status(S_CLIPBOARD, ST_WARN, "当前合成器不支持 Wayland data-control，无法共享剪贴板");
     else if (!app.hub_connected) app_set_status(S_CLIPBOARD, ST_UNKNOWN, "等待连接中枢");
     else if (app.clipboard_enabled) app_set_status(S_CLIPBOARD, ST_OK, "已开启：复制的文本会同步到其他在线设备");
     else app_set_status(S_CLIPBOARD, ST_UNKNOWN, "已关闭（可在管理页面或托盘菜单中开启）");

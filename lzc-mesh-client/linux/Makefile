@@ -16,7 +16,7 @@ CFLAGS += -DLZC_MESH_VERSION=\"$(VERSION)\"
 
 PROTOCOLS = wlr-layer-shell-unstable-v1 wlr-virtual-pointer-unstable-v1 virtual-keyboard-unstable-v1 xdg-shell \
 	pointer-constraints-unstable-v1 relative-pointer-unstable-v1 keyboard-shortcuts-inhibit-unstable-v1 xdg-output-unstable-v1 \
-	wlr-data-control-unstable-v1
+	wlr-data-control-unstable-v1 ext-data-control-v1 fake-input
 PROTO_H = $(PROTOCOLS:%=build/%-client-protocol.h)
 PROTO_C = $(PROTOCOLS:%=build/%-protocol.c)
 SRC = src/main.c src/ui.c src/layout_view.c src/net.c src/lzc.c src/lzc_cli.c src/lzc_http.c src/wl_input.c src/config.c src/clipboard.c src/files.c src/tray.c src/autostart.c src/direct.c src/bluetooth.c src/identity.c src/local_input.c
