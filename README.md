@@ -2,9 +2,9 @@
 
 简体中文 | [English](README.en.md)
 
-用一套键盘和触控板/鼠标控制面前的多台电脑（macOS、Windows、Omarchy）。只同步光标和键盘，不传画面。还支持共享剪贴板（文本，默认开启）和跨设备文件共享。设备之间通过懒猫网络通信。
+用一套键盘和触控板/鼠标控制面前的多台电脑（macOS、Windows、Linux）。只同步光标和键盘，不传画面。还支持共享剪贴板（文本，默认开启）和跨设备文件共享。设备之间通过懒猫网络通信。
 
-**Linux 暂时仅支持 Omarchy（Hyprland），其他 Linux 发行版、桌面环境及 Wayland 合成器不在支持范围内。** 下文中的 Linux 客户端均指 Omarchy 客户端。
+**Linux 客户端支持 Omarchy（Hyprland），从当前源码构建也支持 EndeavourOS 上的 KDE Plasma 6.8（Wayland）。** Plasma 适配使用 KWin 的虚拟输入、layer-shell 和 ext-data-control 协议。
 
 ## 目录
 
@@ -13,7 +13,7 @@
 | `lzc-mesh-lpk/` | 懒猫微服应用：Rust 中枢（布局存储、贴边、输入转发、剪贴板转发、文件存储）和管理页面 |
 | `lzc-mesh-client/macos/` | macOS 客户端（Swift / AppKit，CGEventTap + CGEvent） |
 | `lzc-mesh-client/windows/` | Windows 客户端（C++ / Win32，低级钩子 + SendInput，WinHTTP） |
-| `lzc-mesh-client/linux/` | Linux 客户端（C / GTK4，wlroots 虚拟指针、虚拟键盘、layer-shell） |
+| `lzc-mesh-client/linux/` | Linux 客户端（C / GTK4，Hyprland 或 KWin 虚拟输入、layer-shell） |
 
 ## 工作方式
 
@@ -44,7 +44,7 @@ LPK 首页点击“键盘触控板”，页面空闲且存在已批准、在线�
 
 ## 设备信任与安全
 
-每台客户端持久保存设备私钥。首次接入（包括已有设备升级）需在管理页核对本机显示的完整公钥指纹并批准；之后重连与重启保留信任、设备 ID 和布局。未批准设备不参与共享，不收到对端证书或自动共享数据。撤销信任与客户端运行开关独立，重新开启客户端不能绕过撤销。私钥分别由 macOS Keychain、Windows 当前用户 DPAPI、Omarchy 当前用户专属 0600 文件保护；凭证损坏时停止共享，不自动替换。
+每台客户端持久保存设备私钥。首次接入（包括已有设备升级）需在管理页核对本机显示的完整公钥指纹并批准；之后重连与重启保留信任、设备 ID 和布局。未批准设备不参与共享，不收到对端证书或自动共享数据。撤销信任与客户端运行开关独立，重新开启客户端不能绕过撤销。私钥分别由 macOS Keychain、Windows 当前用户 DPAPI、Linux 当前用户专属 0600 文件保护；凭证损坏时停止共享，不自动替换。
 
 身份签名在连接注册时完成，输入继续使用 QUIC/TLS 加密与本地会话、防重放校验，不逐事件请求中枢鉴权。Windows 中枢发送使用独立的有界后台队列，不在输入注入线程同步等待网络。
 
@@ -65,7 +65,7 @@ LPK 首页点击“键盘触控板”，页面空闲且存在已批准、在线�
 | 懒猫微服 | `cloud.lazycat.app.lzc-mesh-v<版本>.lpk`，拖到微服启动器页面安装 | — |
 | macOS 12+（Apple Silicon / Intel） | `lzc-mesh-macos.dmg`，打开后把 LZC Mesh 拖到“应用程序” | `lzc-mesh-macos.zip`，解压后把 `LZC Mesh.app` 移到“应用程序” |
 | Windows 10/11 x64 | `lzc-mesh-windows-setup.exe`，双击安装，可在“设置 › 应用”中卸载 | `lzc-mesh-windows.zip`，解压后右键 `install.ps1` → 使用 PowerShell 运行 |
-| Linux x86_64（仅 Omarchy） | `lzc-mesh-linux-x86_64.pkg.tar.zst`（Arch），`sudo pacman -U` 安装 | `lzc-mesh-linux-x86_64.tar.gz`，解压后运行 `./install.sh` |
+| Linux x86_64（v0.3.5 发布包适用于 Omarchy） | `lzc-mesh-linux-x86_64.pkg.tar.zst`（Arch），`sudo pacman -U` 安装 | `lzc-mesh-linux-x86_64.tar.gz`，解压后运行 `./install.sh` |
 
 Windows 和 Linux 的安装都不需要管理员权限（Arch 包除外）。LPK 管理页面上的下载链接指向对应版本的 Release。开发构建的设备凭证机制需要配套升级，旧 Release 包不支持该机制。
 
@@ -95,12 +95,12 @@ cd lzc-mesh-client/macos && ./build.sh
 # Windows（需要 Rust 的 x86_64-pc-windows-gnu target 和 zig，生成 setup.exe 和 zip）
 cd lzc-mesh-client/windows && ./build.sh
 
-# Omarchy（Linux 客户端唯一支持的环境；需要 Rust、gtk4、libsoup-3.0、json-glib、wayland-client、xkbcommon）
+# Linux（Omarchy 或 Plasma Wayland；需要 Rust、gtk4、libsoup-3.0、json-glib、wayland-client、xkbcommon）
 cd lzc-mesh-client/linux && make && make dist   # tar.gz
 cd lzc-mesh-client/linux && make pkg            # Arch 包，需要 makepkg
 ```
 
-Linux 客户端支持在 `x86_64` 和 `aarch64` Omarchy 上原生构建，`make dist` 按本机架构命名压缩包，`make pkg` 保留 makepkg 配置的压缩格式。aarch64 的本地构建及验证记录见 [ARM Linux 构建记录](spec-tests/linux-aarch64-build.md)；上面的下载表仍对应上游已发布的安装包。
+Linux 客户端支持在 `x86_64` 和 `aarch64` Omarchy 上原生构建，也可在 EndeavourOS x86_64 上构建。`make dist` 按本机架构命名压缩包，`make pkg` 保留 makepkg 配置的压缩格式。aarch64 的本地构建及验证记录见 [ARM Linux 构建记录](spec-tests/linux-aarch64-build.md)；上面的下载表仍对应上游已发布的安装包。
 
 Linux 客户端也支持通过已登录的 `hclient-cli` 获取微服信息和登录会话，没有桌面版配置时自动启用。已验证 hclient-cli 1.5.1 的 TUN 环境，详见 [命令行客户端接入说明](lzc-mesh-client/linux/HCLIENT-CLI.md)。
 
@@ -110,7 +110,7 @@ Linux 客户端也支持通过已登录的 `hclient-cli` 获取微服信息和�
 
 - macOS：需要“辅助功能”和“输入监控”，开启已批准客户端的共享功能时会请求缺失授权。蓝牙模式还需要系统蓝牙授权及配对。
 - Windows：普通权限即可；控制管理员权限的窗口时需要“以管理员身份运行”，客户端窗口会提示。
-- Linux：仅支持 Omarchy 自带的 Hyprland 环境；不支持 Sway、其他桌面环境或其他发行版。
+- Linux：以普通用户运行。本机实体键鼠自动接管需要当前用户已有的输入设备读取权限。KWin 虚拟输入协议提供滚动位移。
 
 ## 状态
 

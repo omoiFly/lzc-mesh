@@ -10,7 +10,7 @@ pkgrel=1
 pkgdesc="懒猫设备接力: share one keyboard, mouse, clipboard and files across your computers over the LazyCat network"
 arch=('x86_64' 'aarch64')
 url="https://github.com/ponzS/lzc-mesh"
-license=('LicenseRef-PolyForm-Noncommercial-1.0.0')
+license=('LicenseRef-PolyForm-Noncommercial-1.0.0' 'LGPL-2.1-or-later' 'LicenseRef-Wayland-ext-data-control')
 depends=('gtk4>=4.10' 'libsoup3' 'json-glib' 'wayland' 'libxkbcommon' 'glib2')
 optdepends=('python: optional host Bluetooth descriptor bridge')
 makedepends=('wayland-protocols' 'pkgconf' 'rust' 'python')
@@ -33,4 +33,6 @@ package() {
   install -Dm0644 BLUETOOTH.md "$pkgdir/usr/share/doc/lzc-mesh/BLUETOOTH.md"
   install -Dm0644 HCLIENT-CLI.md "$pkgdir/usr/share/doc/lzc-mesh/HCLIENT-CLI.md"
   install -Dm0644 "$startdir/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm0644 -t "$pkgdir/usr/share/licenses/$pkgname/protocols" \
+    protocols/ext-data-control-v1.xml protocols/fake-input.xml protocols/LGPL-2.1-or-later.txt
 }

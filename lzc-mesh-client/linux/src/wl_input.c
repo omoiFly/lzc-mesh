@@ -1,4 +1,4 @@
-// Wayland input for Omarchy's Hyprland session.
+// Wayland input for Hyprland and KWin sessions.
 //
 // Approach borrowed from lightos-remote-desktop's Wayland backend
 // (zwlr_virtual_pointer + zwp_virtual_keyboard with an xkb evdev keymap for
@@ -27,6 +27,7 @@
 #include "wl_input.h"
 #include "pointer_coords.h"
 
+#include "fake-input-client-protocol.h"
 #include "keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h"
 #include "pointer-constraints-unstable-v1-client-protocol.h"
 #include "relative-pointer-unstable-v1-client-protocol.h"
@@ -69,6 +70,8 @@ static struct {
     struct wl_surface *cursor_surface;
     struct zwlr_layer_shell_v1 *layer_shell;
     struct zxdg_output_manager_v1 *xdg_output_manager;
+    uint32_t kwin_input_name;
+    struct org_kde_kwin_fake_input *kwin_input;
     struct zwlr_virtual_pointer_manager_v1 *vp_manager;
     struct zwp_virtual_keyboard_manager_v1 *vk_manager;
     struct zwp_pointer_constraints_v1 *constraints;
@@ -407,6 +410,8 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name, const char
     else if (!strcmp(iface, zxdg_output_manager_v1_interface.name)) BIND(W.xdg_output_manager, zxdg_output_manager_v1_interface, 3);
     else if (!strcmp(iface, zwlr_virtual_pointer_manager_v1_interface.name)) BIND(W.vp_manager, zwlr_virtual_pointer_manager_v1_interface, 2);
     else if (!strcmp(iface, zwp_virtual_keyboard_manager_v1_interface.name)) BIND(W.vk_manager, zwp_virtual_keyboard_manager_v1_interface, 1);
+    else if (!strcmp(iface, org_kde_kwin_fake_input_interface.name) &&
+             version >= ORG_KDE_KWIN_FAKE_INPUT_DESTROY_SINCE_VERSION) W.kwin_input_name = name;
     else if (!strcmp(iface, zwp_pointer_constraints_v1_interface.name)) BIND(W.constraints, zwp_pointer_constraints_v1_interface, 1);
     else if (!strcmp(iface, zwp_relative_pointer_manager_v1_interface.name)) BIND(W.relative_manager, zwp_relative_pointer_manager_v1_interface, 1);
     else if (!strcmp(iface, zwp_keyboard_shortcuts_inhibit_manager_v1_interface.name))
@@ -422,6 +427,7 @@ static void reg_global(void *d, struct wl_registry *r, uint32_t name, const char
 }
 
 static void reg_remove(void *d, struct wl_registry *r, uint32_t name) {
+    if (name == W.kwin_input_name) W.kwin_input_name = 0;
     for (guint i = 0; i < W.outputs->len; i++) {
         Output *o = g_ptr_array_index(W.outputs, i);
         if (o->name != name) continue;
@@ -478,7 +484,7 @@ void wl_input_init(void) {
     W.held_buttons = g_hash_table_new(NULL, NULL);
     W.display = wl_display_connect(NULL);
     if (!W.display) {
-        app_set_status(S_INPUT, ST_ERROR, "未检测到 Wayland 会话（WAYLAND_DISPLAY 未设置），Linux 暂时仅支持 Omarchy（Hyprland）");
+        app_set_status(S_INPUT, ST_ERROR, "未检测到 Wayland 会话（WAYLAND_DISPLAY 未设置）");
         return;
     }
     W.registry = wl_display_get_registry(W.display);
@@ -489,17 +495,17 @@ void wl_input_init(void) {
 
     GString *missing = g_string_new(NULL);
     if (!W.layer_shell) g_string_append(missing, " wlr-layer-shell");
-    if (!W.vp_manager) g_string_append(missing, " wlr-virtual-pointer");
-    if (!W.vk_manager) g_string_append(missing, " virtual-keyboard");
+    if (!W.seat) g_string_append(missing, " wl-seat");
+    if (!W.kwin_input_name) {
+        if (!W.vp_manager) g_string_append(missing, " wlr-virtual-pointer");
+        if (!W.vk_manager) g_string_append(missing, " virtual-keyboard");
+    }
     if (!W.constraints) g_string_append(missing, " pointer-constraints");
     if (!W.relative_manager) g_string_append(missing, " relative-pointer");
     if (!W.xdg_output_manager) g_string_append(missing, " xdg-output");
     clipboard_start(W.seat);
-    bool kb = W.vk_manager && W.seat;
     if (missing->len) {
-        app_set_status(S_INPUT, ST_ERROR, "合成器缺少协议：%s。Linux 暂时仅支持 Omarchy（Hyprland）", missing->str);
-    } else if (!kb) {
-        app_set_status(S_INPUT, ST_ERROR, "无法创建虚拟键盘（xkb 键盘布局编译失败）");
+        app_set_status(S_INPUT, ST_ERROR, "合成器缺少协议：%s", missing->str);
     } else {
         const char *desktop = g_getenv("XDG_CURRENT_DESKTOP");
         app_set_status(S_INPUT, ST_OK, "Wayland 输入就绪（%s：虚拟指针、虚拟键盘、边缘检测、指针锁定）", desktop ? desktop : "wlroots");
@@ -515,14 +521,25 @@ void wl_input_set_active(bool on) {
     if (!W.display) return;
     if (!on) {
         wl_input_capture(false); wl_input_leave();
+        if (W.kwin_input) {
+            org_kde_kwin_fake_input_destroy(W.kwin_input);
+            W.kwin_input = NULL;
+        }
         if (W.vkeyboard) { zwp_virtual_keyboard_v1_destroy(W.vkeyboard); W.vkeyboard = NULL; }
         if (W.vpointer) { zwlr_virtual_pointer_v1_destroy(W.vpointer); W.vpointer = NULL; }
         app_set_status(S_INPUT, ST_UNKNOWN, "客户端已关闭，虚拟输入已停用");
     } else {
-        if (!W.vpointer && W.vp_manager && W.seat) W.vpointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(W.vp_manager, W.seat);
-        if (!W.vkeyboard && W.vk_manager && W.seat) setup_virtual_keyboard();
-        app_set_status(S_INPUT, W.vpointer && W.vkeyboard ? ST_OK : ST_ERROR,
-                       W.vpointer && W.vkeyboard ? "Wayland 虚拟输入已就绪" : "无法启用 Wayland 虚拟输入");
+        if (W.vp_manager && W.vk_manager && W.seat) {
+            if (!W.vpointer) W.vpointer = zwlr_virtual_pointer_manager_v1_create_virtual_pointer(W.vp_manager, W.seat);
+            if (!W.vkeyboard) setup_virtual_keyboard();
+        } else if (W.kwin_input_name && W.seat && !W.kwin_input) {
+            W.kwin_input = wl_registry_bind(W.registry, W.kwin_input_name, &org_kde_kwin_fake_input_interface,
+                                            ORG_KDE_KWIN_FAKE_INPUT_DESTROY_SINCE_VERSION);
+            org_kde_kwin_fake_input_authenticate(W.kwin_input, "LZC Mesh", "Cross-device keyboard and pointer sharing");
+        }
+        bool ready = W.kwin_input || (W.vpointer && W.vkeyboard);
+        app_set_status(S_INPUT, ready ? ST_OK : ST_ERROR,
+                       ready ? "Wayland 虚拟输入已就绪" : "无法启用 Wayland 虚拟输入");
     }
     flush();
 }
@@ -578,11 +595,18 @@ void wl_input_capture(bool on) {
 // ---------------------------------------------------------------- injection
 
 static void abs_move(double nx, double ny) {
-    if (!W.vpointer || app.screen_w <= 0) return;
+    if (!W.vpointer && !W.kwin_input) return;
     PointerCoords point;
     if (!pointer_coords(nx,ny,app.screen_w,app.screen_h,&point)) return;
-    zwlr_virtual_pointer_v1_motion_absolute(W.vpointer, now_ms(), point.x, point.y, point.width, point.height);
-    zwlr_virtual_pointer_v1_frame(W.vpointer);
+    if (W.kwin_input) {
+        int x0, y0, x1, y1;
+        bounds(&x0, &y0, &x1, &y1);
+        org_kde_kwin_fake_input_pointer_motion_absolute(W.kwin_input,
+            wl_fixed_from_double(x0 + point.x / 4096.0), wl_fixed_from_double(y0 + point.y / 4096.0));
+    } else {
+        zwlr_virtual_pointer_v1_motion_absolute(W.vpointer, now_ms(), point.x, point.y, point.width, point.height);
+        zwlr_virtual_pointer_v1_frame(W.vpointer);
+    }
     flush();
 }
 
@@ -617,13 +641,19 @@ static uint32_t linux_button(int b) {
     }
 }
 
+static void inject_button(uint32_t button, bool down) {
+    uint32_t state = down ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED;
+    if (W.kwin_input) org_kde_kwin_fake_input_button(W.kwin_input, button, state);
+    else if (W.vpointer) zwlr_virtual_pointer_v1_button(W.vpointer, now_ms(), button, state);
+}
+
 void wl_input_button(int button, bool down) {
     uint32_t b = linux_button(button);
-    if (!W.vpointer || !b) return;
+    if ((!W.vpointer && !W.kwin_input) || !b) return;
     if (down) g_hash_table_add(W.held_buttons, GUINT_TO_POINTER(b));
     else g_hash_table_remove(W.held_buttons, GUINT_TO_POINTER(b));
-    zwlr_virtual_pointer_v1_button(W.vpointer, now_ms(), b, down ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
-    zwlr_virtual_pointer_v1_frame(W.vpointer);
+    inject_button(b, down);
+    if (W.vpointer) zwlr_virtual_pointer_v1_frame(W.vpointer);
     flush();
 }
 
@@ -641,7 +671,17 @@ static void wheel_axis(uint32_t axis, double v120, uint32_t source) {
 }
 
 void wl_input_wheel(double dx, double dy, const char *source, bool stop_x, bool stop_y) {
-    if (!W.vpointer || !isfinite(dx) || !isfinite(dy)) return;
+    if (!isfinite(dx) || !isfinite(dy)) return;
+    if (W.kwin_input) {
+        // KWin fake input exposes displacement only, with no source or stop events.
+        if (dx) org_kde_kwin_fake_input_axis(W.kwin_input, WL_POINTER_AXIS_HORIZONTAL_SCROLL,
+                                             wl_fixed_from_double(CLAMP(-dx / 12.0, -32768.0, 32768.0)));
+        if (dy) org_kde_kwin_fake_input_axis(W.kwin_input, WL_POINTER_AXIS_VERTICAL_SCROLL,
+                                             wl_fixed_from_double(CLAMP(-dy / 12.0, -32768.0, 32768.0)));
+        flush();
+        return;
+    }
+    if (!W.vpointer) return;
     // Only legacy senders need inference. Never infer the type of a new stream
     // from its distance: a trackpad can legitimately report an exact notch.
     uint32_t kind = source && !strcmp(source, "finger") ? WL_POINTER_AXIS_SOURCE_FINGER :
@@ -667,10 +707,16 @@ void wl_input_wheel(double dx, double dy, const char *source, bool stop_x, bool 
 }
 
 void wl_input_key(uint32_t code, bool down) {
-    if (!W.vkeyboard || code == 0 || code > 767) return;
+    if ((!W.vkeyboard && !W.kwin_input) || code == 0 || code > 767) return;
     if (down) g_hash_table_add(W.held_keys, GUINT_TO_POINTER(code));
     else if (!g_hash_table_remove(W.held_keys, GUINT_TO_POINTER(code))) return;
-    zwp_virtual_keyboard_v1_key(W.vkeyboard, now_ms(), code, down ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+    uint32_t state = down ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED;
+    if (W.kwin_input) {
+        org_kde_kwin_fake_input_keyboard_key(W.kwin_input, code, state);
+        flush();
+        return;
+    }
+    zwp_virtual_keyboard_v1_key(W.vkeyboard, now_ms(), code, state);
     xkb_state_update_key(W.xkb_state, code + 8, down ? XKB_KEY_DOWN : XKB_KEY_UP);
     zwp_virtual_keyboard_v1_modifiers(W.vkeyboard, xkb_state_serialize_mods(W.xkb_state, XKB_STATE_MODS_DEPRESSED),
                                       xkb_state_serialize_mods(W.xkb_state, XKB_STATE_MODS_LATCHED),
@@ -697,7 +743,7 @@ void wl_input_leave(void) {
     GList *buttons = g_hash_table_get_keys(W.held_buttons);
     for (GList *l = buttons; l; l = l->next) {
         uint32_t b = GPOINTER_TO_UINT(l->data);
-        if (W.vpointer) zwlr_virtual_pointer_v1_button(W.vpointer, now_ms(), b, WL_POINTER_BUTTON_STATE_RELEASED);
+        inject_button(b, false);
     }
     g_list_free(buttons);
     g_hash_table_remove_all(W.held_buttons);

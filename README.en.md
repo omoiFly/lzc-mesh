@@ -2,9 +2,9 @@
 
 [简体中文](README.md) | English
 
-Control several computers in front of you (macOS, Windows, Omarchy) with one keyboard and trackpad/mouse. Only the cursor and keyboard are synced; no screen is streamed. It also offers a shared clipboard (text, on by default) and file sharing across devices. Devices talk to each other over the LazyCat network.
+Control several computers in front of you (macOS, Windows, Linux) with one keyboard and trackpad/mouse. Only the cursor and keyboard are synced; no screen is streamed. It also offers a shared clipboard (text, on by default) and file sharing across devices. Devices talk to each other over the LazyCat network.
 
-**Linux currently supports Omarchy (Hyprland) only. Other Linux distributions, desktop environments and Wayland compositors are not supported.** References to the Linux client below mean the Omarchy client.
+**The Linux client supports Omarchy (Hyprland). Builds from the current source also support KDE Plasma 6.8 on EndeavourOS in a Wayland session.** Plasma support uses KWin fake input, layer-shell and ext-data-control.
 
 ## Layout
 
@@ -13,7 +13,7 @@ Control several computers in front of you (macOS, Windows, Omarchy) with one key
 | `lzc-mesh-lpk/` | LazyCat MicroServer app: Rust hub (layout storage, edge snapping, input relay, clipboard relay, file storage) and the management page |
 | `lzc-mesh-client/macos/` | macOS client (Swift / AppKit, CGEventTap + CGEvent) |
 | `lzc-mesh-client/windows/` | Windows client (C++ / Win32, low-level hooks + SendInput, WinHTTP) |
-| `lzc-mesh-client/linux/` | Linux client (C / GTK4, wlroots virtual pointer, virtual keyboard, layer-shell) |
+| `lzc-mesh-client/linux/` | Linux client (C / GTK4, Hyprland or KWin virtual input, layer-shell) |
 
 ## How it works
 
@@ -36,7 +36,7 @@ Direct input does not transmit screenshots and runs as the logged-in user. Input
 
 ## Device trust and security
 
-Each client keeps a persistent private device key. First enrollment, including existing devices upgrading, requires approval after comparing the full public-key fingerprint shown on the client. Trust, device IDs and layout survive reconnects and restarts. Unapproved devices cannot participate in sharing or receive peer certificates and automatic shared data. Revoking trust is separate from the client running switch. Keys use macOS Keychain, Windows current-user DPAPI or an owner-only 0600 file on Omarchy. Invalid stored credentials stop sharing rather than silently generating a replacement.
+Each client keeps a persistent private device key. First enrollment, including existing devices upgrading, requires approval after comparing the full public-key fingerprint shown on the client. Trust, device IDs and layout survive reconnects and restarts. Unapproved devices cannot participate in sharing or receive peer certificates and automatic shared data. Revoking trust is separate from the client running switch. Keys use macOS Keychain, Windows current-user DPAPI or an owner-only 0600 file on Linux. Invalid stored credentials stop sharing rather than silently generating a replacement.
 
 Device signatures are used during connection registration, not per input event. Input retains QUIC/TLS encryption and local session/replay checks without a hub authorization round trip per event. Windows hub sends use a bounded background FIFO instead of synchronous network writes on the input injection thread.
 
@@ -57,7 +57,7 @@ Packages are on [GitHub Releases](https://github.com/ponzS/lzc-mesh/releases). E
 | LazyCat MicroServer | `cloud.lazycat.app.lzc-mesh-v<version>.lpk`: drag it onto the box launcher page | — |
 | macOS 12+ (Apple Silicon / Intel) | `lzc-mesh-macos.dmg`: open it and drag the app to Applications | `lzc-mesh-macos.zip`: unzip and move `LZC Mesh.app` to Applications |
 | Windows 10/11 x64 | `lzc-mesh-windows-setup.exe`: double-click to install; uninstall from Settings › Apps | `lzc-mesh-windows.zip`: unzip, right-click `install.ps1` → Run with PowerShell |
-| Linux x86_64 (Omarchy only) | `lzc-mesh-linux-x86_64.pkg.tar.zst` (Arch): `sudo pacman -U` | `lzc-mesh-linux-x86_64.tar.gz`: unpack and run `./install.sh` |
+| Linux x86_64 (v0.3.5 release supports Omarchy) | `lzc-mesh-linux-x86_64.pkg.tar.zst` (Arch): `sudo pacman -U` | `lzc-mesh-linux-x86_64.tar.gz`: unpack and run `./install.sh` |
 
 Installing on Windows and Linux needs no administrator rights (except the Arch package). The download links on the management page point to the matching release. Device credentials in development builds require matching upgraded clients; older Release packages do not support that mechanism.
 
@@ -90,12 +90,12 @@ cd lzc-mesh-client/macos && ./build.sh
 # Windows (requires Rust's x86_64-pc-windows-gnu target and zig; produces setup.exe and a zip)
 cd lzc-mesh-client/windows && ./build.sh
 
-# Omarchy (the only supported Linux environment; needs Rust, gtk4, libsoup-3.0, json-glib, wayland-client, xkbcommon)
+# Linux (Omarchy or Plasma Wayland; needs Rust, gtk4, libsoup-3.0, json-glib, wayland-client, xkbcommon)
 cd lzc-mesh-client/linux && make && make dist   # tar.gz
 cd lzc-mesh-client/linux && make pkg            # Arch package, needs makepkg
 ```
 
-The Linux client can be built natively on `x86_64` and `aarch64` Omarchy. `make dist` names its archive after the host architecture; `make pkg` preserves the compression format configured in makepkg. See the [ARM Linux build report](spec-tests/linux-aarch64-build.md) for local aarch64 validation. The download table above still describes upstream release assets.
+The Linux client can be built natively on `x86_64` and `aarch64` Omarchy and on x86_64 EndeavourOS. `make dist` names its archive after the host architecture; `make pkg` preserves the compression format configured in makepkg. See the [ARM Linux build report](spec-tests/linux-aarch64-build.md) for local aarch64 validation. The download table above still describes upstream release assets.
 
 When no desktop client configuration exists, the Linux client can discover microservers and obtain the login session from a signed-in `hclient-cli`. Validated with hclient-cli 1.5.1 using TUN; see the [CLI integration notes](lzc-mesh-client/linux/HCLIENT-CLI.md).
 
@@ -105,7 +105,7 @@ Output goes to `lzc-mesh-lpk/dist/` and `lzc-mesh-client/dist/`. The macOS `buil
 
 - macOS: needs Accessibility and Input Monitoring; missing permissions are requested when sharing is activated on an approved client.
 - Windows: runs with normal rights. Controlling windows that run as administrator requires "Run as administrator"; the client window tells you when.
-- Linux: Omarchy's Hyprland environment only. Sway, other desktop environments and other distributions are not supported.
+- Linux: Run as a regular user. Automatic takeover with a local keyboard or mouse requires existing read access to the input devices. KWin fake input forwards scroll displacement.
 
 ## Status
 
