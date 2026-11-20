@@ -169,7 +169,11 @@ final class Clipboard: NSObject, URLSessionTaskDelegate {
         guard Self.validID(id), size >= 45, size <= Self.maxImageBytes,
               let request = imageRequest("GET", id: id) else { return }
         let count = NSPasteboard.general.changeCount
-        lastCount = count
+        if count != lastCount {
+            // Preserve a local copy that arrived before the next timer tick.
+            poll()
+            return
+        }
         interruptImage()
         let epoch = imageEpoch
         let task = imageSession.downloadTask(with: request) { [weak self] file, response, _ in

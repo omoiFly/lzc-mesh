@@ -17,7 +17,6 @@
 
 #include <thread>
 #include <atomic>
-#include <set>
 
 #include "net.h"
 
@@ -30,8 +29,6 @@ std::atomic<bool> active{false};
 std::atomic<uint64_t> generation{0};
 std::atomic<uint64_t> imageGeneration{1};
 std::mutex activityMutex;
-struct Req;
-std::set<Req *> requests;
 thread_local uint64_t workerGeneration = 0;
 bool valid(uint64_t ticket) { return active && generation == ticket; }
 
@@ -56,21 +53,19 @@ void postStatus(const std::wstring &text) {
     if (!PostMessageW(parentWnd, WM_APP_FILES_STATUS, (WPARAM)workerGeneration, (LPARAM)value)) delete value;
 }
 
-// One WinHTTP request against lzc-mesh.<box>/api/files/<name>.
+// The worker owns the synchronous WinHTTP handles. Cancellation invalidates
+// its ticket so it can close the handles once the current call returns.
 struct Req {
-    HINTERNET s = nullptr, c = nullptr;
-    std::atomic<HINTERNET> r{nullptr};
-    uint64_t ticket, imageTicket;
-    explicit Req(uint64_t epoch, uint64_t imageEpoch = 0): ticket(epoch), imageTicket(imageEpoch) {
-        std::lock_guard<std::mutex> lock(activityMutex);
-        requests.insert(this);
-    }
+    HINTERNET s = nullptr, c = nullptr, r = nullptr;
+    const uint64_t ticket, imageTicket;
+    explicit Req(uint64_t epoch, uint64_t imageEpoch = 0): ticket(epoch), imageTicket(imageEpoch) {}
+    Req(const Req &) = delete;
+    Req &operator=(const Req &) = delete;
     bool current() const { return valid(ticket) && (!imageTicket || imageGeneration == imageTicket); }
-    void cancel() { if (auto handle = r.exchange(nullptr)) WinHttpCloseHandle(handle); }
     ~Req() {
-        std::lock_guard<std::mutex> lock(activityMutex);
-        requests.erase(this); cancel();
-        if (c) WinHttpCloseHandle(c); if (s) WinHttpCloseHandle(s);
+        if (r) WinHttpCloseHandle(r);
+        if (c) WinHttpCloseHandle(c);
+        if (s) WinHttpCloseHandle(s);
     }
     bool open(const wchar_t *method, const std::wstring &host, const std::wstring &name, const std::wstring &cookie, const std::wstring &device, const std::wstring &token) {
         return openPath(method, host, L"/api/files/" + escape(name), cookie, device, token);
@@ -82,26 +77,26 @@ struct Req {
         WinHttpSetTimeouts(s, 15000, 15000, 120000, 120000);
         c = WinHttpConnect(s, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
         if (!c) return false;
-        auto handle = WinHttpOpenRequest(c, method, path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-        if (!handle) return false;
-        {
-            std::lock_guard<std::mutex> lock(activityMutex);
-            if (!current()) { WinHttpCloseHandle(handle); return false; }
-            r = handle;
-        }
+        r = WinHttpOpenRequest(c, method, path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        if (!r || !current()) return false;
         DWORD noRedirect = WINHTTP_DISABLE_REDIRECTS;
         WinHttpSetOption(r, WINHTTP_OPTION_DISABLE_FEATURE, &noRedirect, sizeof noRedirect);
         std::wstring h = L"Cookie: Lzc-Auth-Token=" + cookie + L"\r\nX-Lzc-Mesh-Device: " + escape(device) + L"\r\nX-Lzc-Mesh-Device-Id: " + widen(g.deviceId) + L"\r\nX-Lzc-Mesh-Device-Token: " + token + L"\r\n";
         return WinHttpAddRequestHeaders(r, h.c_str(), (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD);
     }
+    bool send(DWORD size = 0) {
+        return current() && WinHttpSendRequest(r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, size, 0);
+    }
+    bool receive() { return current() && WinHttpReceiveResponse(r, nullptr); }
     DWORD status() {
         DWORD code = 0, len = sizeof code;
-        WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code, &len, nullptr);
+        if (current())
+            WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code, &len, nullptr);
         return code;
     }
 
     bool sendImage(const ImageBytes &bytes) {
-        if (bytes.size() > MAXDWORD ||
+        if (!current() || bytes.size() > MAXDWORD ||
             !WinHttpSendRequest(r, L"Content-Type: image/png\r\n", DWORD(-1), WINHTTP_NO_REQUEST_DATA, 0, DWORD(bytes.size()), 0)) return false;
         for (size_t offset = 0; offset < bytes.size();) {
             const DWORD count = DWORD(std::min<size_t>(bytes.size() - offset, 64 * 1024));
@@ -109,7 +104,7 @@ struct Req {
             if (!current() || !WinHttpWriteData(r, bytes.data() + offset, count, &written) || written != count) return false;
             offset += written;
         }
-        return current() && WinHttpReceiveResponse(r, nullptr);
+        return receive();
     }
 
     DWORD readImageResponse(ImageBytes &bytes, size_t size) {
@@ -152,7 +147,7 @@ void uploadWorker(std::wstring path, std::wstring host, std::wstring cookie, std
     bool ok = q.open(L"PUT", host, name, cookie, deviceName(), token);
     std::wstring len = L"Content-Type: application/octet-stream\r\nContent-Length: " + std::to_wstring(size.QuadPart) + L"\r\n";
     ok = ok && WinHttpAddRequestHeaders(q.r, len.c_str(), (DWORD)-1L, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
-    ok = ok && WinHttpSendRequest(q.r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH, 0);
+    ok = ok && q.send(WINHTTP_IGNORE_REQUEST_TOTAL_LENGTH);
     std::vector<char> buf(256 * 1024);
     long long sent = 0;
     int lastPct = -1;
@@ -161,7 +156,7 @@ void uploadWorker(std::wstring path, std::wstring host, std::wstring cookie, std
         if (!ReadFile(f, buf.data(), (DWORD)buf.size(), &read, nullptr)) { ok = false; break; }
         if (!read) break;
         DWORD wrote = 0;
-        ok = WinHttpWriteData(q.r, buf.data(), read, &wrote) && wrote == read;
+        ok = q.current() && WinHttpWriteData(q.r, buf.data(), read, &wrote) && wrote == read;
         sent += read;
         int pct = size.QuadPart ? (int)(sent * 100 / size.QuadPart) : 100;
         if (pct / 10 != lastPct / 10) {
@@ -170,7 +165,7 @@ void uploadWorker(std::wstring path, std::wstring host, std::wstring cookie, std
         }
     }
     CloseHandle(f);
-    ok = ok && valid(ticket) && WinHttpReceiveResponse(q.r, nullptr);
+    ok = ok && q.receive();
     DWORD code = ok ? q.status() : 0;
     if (code == 200) postStatus(L"已上传 " + name);
     else postStatus(fmt(L"上传 %ls 失败：%ls", name.c_str(), code == 413 ? L"文件过大" : code ? fmt(L"HTTP %lu", code).c_str() : fmt(L"网络错误 %lu", GetLastError()).c_str()));
@@ -188,8 +183,7 @@ void downloadWorker(std::wstring name, std::wstring host, std::wstring cookie, s
     std::wstring stem = dot == std::wstring::npos || dot == 0 ? name : name.substr(0, dot), ext = stem == name ? L"" : name.substr(dot);
     for (int n = 2; GetFileAttributesW(dest.c_str()) != INVALID_FILE_ATTRIBUTES; n++) dest = dir + L"\\" + stem + fmt(L" (%d)", n) + ext;
     Req q(ticket);
-    bool ok = q.open(L"GET", host, name, cookie, deviceName(), token) && WinHttpSendRequest(q.r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-              WinHttpReceiveResponse(q.r, nullptr);
+    bool ok = q.open(L"GET", host, name, cookie, deviceName(), token) && q.send() && q.receive();
     DWORD code = ok ? q.status() : 0;
     if (code != 200) {
         postStatus(fmt(L"下载 %ls 失败：%ls", name.c_str(), code ? fmt(L"HTTP %lu", code).c_str() : L"网络错误"));
@@ -205,7 +199,8 @@ void downloadWorker(std::wstring name, std::wstring host, std::wstring cookie, s
         if (!WinHttpQueryDataAvailable(q.r, &avail)) { ok = false; break; }
         if (!avail) break;
         DWORD read = 0, wrote = 0;
-        ok = WinHttpReadData(q.r, buf.data(), std::min<DWORD>(avail, (DWORD)buf.size()), &read) && WriteFile(f, buf.data(), read, &wrote, nullptr) && wrote == read;
+        ok = q.current() && WinHttpReadData(q.r, buf.data(), std::min<DWORD>(avail, (DWORD)buf.size()), &read) &&
+             q.current() && WriteFile(f, buf.data(), read, &wrote, nullptr) && wrote == read;
     }
     CloseHandle(f);
     std::unique_lock<std::mutex> commit(activityMutex);
@@ -224,8 +219,7 @@ void deleteWorker(std::wstring name, std::wstring host, std::wstring cookie, std
     workerGeneration = ticket;
     if (!valid(ticket)) return;
     Req q(ticket);
-    bool ok = q.open(L"DELETE", host, name, cookie, deviceName(), token) && WinHttpSendRequest(q.r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
-              WinHttpReceiveResponse(q.r, nullptr);
+    bool ok = q.open(L"DELETE", host, name, cookie, deviceName(), token) && q.send() && q.receive();
     DWORD code = ok ? q.status() : 0;
     postStatus(code == 204 || code == 404 ? L"已删除 " + name : fmt(L"删除 %ls 失败（%lu）", name.c_str(), code));
 }
@@ -308,8 +302,8 @@ void setStatusText(const std::wstring &t) {
 void setActive(bool on) {
     std::lock_guard<std::mutex> lock(activityMutex);
     if (active == on) return;
-    active = on; ++generation;
-    if (!on) for (auto *request : requests) request->cancel();
+    ++generation;
+    active = on;
 }
 bool accepts(uint64_t ticket) { return valid(ticket); }
 
@@ -322,9 +316,7 @@ bool ready() {
 }
 
 void cancelClipboardRequests() {
-    std::lock_guard<std::mutex> lock(activityMutex);
     ++imageGeneration;
-    for (auto *request : requests) if (request->imageTicket) request->cancel();
 }
 
 void requestClipboardImage(std::shared_ptr<const ImageBytes> png, const std::string &id, size_t size,
@@ -336,9 +328,7 @@ void requestClipboardImage(std::shared_ptr<const ImageBytes> png, const std::str
         Req request(ticket, imageTicket);
         const bool upload = bool(png);
         const bool sent = request.openPath(upload ? L"PUT" : L"GET", server, path, cookie, deviceName(), token) &&
-            (upload ? request.sendImage(*png) :
-             WinHttpSendRequest(request.r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
-             && WinHttpReceiveResponse(request.r, nullptr));
+            (upload ? request.sendImage(*png) : request.send() && request.receive());
         ClipboardImageResponse response;
         response.status = sent ? request.status() : 0;
         if (!response.status) response.error = GetLastError();
