@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hub.input = input
         hub.clipboard = clipboard
         clipboard.hub = hub
+        clipboard.files = ui.filesView.client
         state.onFiles = { [weak self] in self?.ui.filesView.update(AppState.shared.files) }
         state.onActivity = { [weak self] on in
             guard let self else { return }

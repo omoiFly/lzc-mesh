@@ -45,13 +45,20 @@ final class FilesClient {
     private func status(_ text: String) { onStatus?(text) }
 
     func upload(_ file: URL) {
-        let name = file.lastPathComponent
+        upload(file.lastPathComponent, file: file, data: nil)
+    }
+
+    func uploadClipboardPNG(_ data: Data) {
+        upload("clipboard-\(UUID().uuidString).png", file: nil, data: data)
+    }
+
+    private func upload(_ name: String, file: URL?, data: Data?) {
         guard var req = request("PUT", name) else { return }
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        let size = data?.count ?? file.flatMap { try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize } ?? 0
         status("正在上传 \(name)（\(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))）…")
         let id = UUID(), epoch = generation
-        let task = session.uploadTask(with: req, fromFile: file) { [weak self] _, resp, err in
+        let completion: (Data?, URLResponse?, Error?) -> Void = { [weak self] _, resp, err in
             guard let self else { return }
             self.tasks[id] = nil
             guard self.active, self.generation == epoch, AppState.shared.operational else { return }
@@ -62,6 +69,10 @@ final class FilesClient {
                 AppState.shared.log("上传 \(name) 失败：\(why)"); self.onStatus?("上传失败：\(why)")
             }
         }
+        let task: URLSessionUploadTask
+        if let file { task = session.uploadTask(with: req, fromFile: file, completionHandler: completion) }
+        else if let data { task = session.uploadTask(with: req, from: data, completionHandler: completion) }
+        else { return }
         tasks[id] = task; task.resume()
     }
 

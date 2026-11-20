@@ -1,6 +1,6 @@
 # 懒猫设备接力 (LZC Mesh) Linux client: GTK4 window, libsoup3 hub connection, Wayland input and clipboard.
 CC ?= gcc
-PKGS = gtk4 libsoup-3.0 json-glib-1.0 wayland-client wayland-cursor xkbcommon cairo
+PKGS = gtk4 gio-unix-2.0 libsoup-3.0 json-glib-1.0 wayland-client wayland-cursor xkbcommon cairo
 CFLAGS += -O2 -g -Wall -Wextra -Wno-unused-parameter -std=gnu11 $(shell pkg-config --cflags $(PKGS)) -Ibuild
 LDLIBS += $(shell pkg-config --libs $(PKGS)) -lm
 ROOT := $(abspath ../..)
@@ -20,7 +20,7 @@ PROTOCOLS = wlr-layer-shell-unstable-v1 wlr-virtual-pointer-unstable-v1 virtual-
 PROTO_H = $(PROTOCOLS:%=build/%-client-protocol.h)
 PROTO_C = $(PROTOCOLS:%=build/%-protocol.c)
 PROTOCOL_NOTICES = protocols/ext-data-control-v1.xml protocols/fake-input.xml protocols/LGPL-2.1-or-later.txt
-SRC = src/main.c src/ui.c src/layout_view.c src/net.c src/lzc.c src/lzc_cli.c src/lzc_http.c src/wl_input.c src/config.c src/clipboard.c src/files.c src/tray.c src/autostart.c src/direct.c src/bluetooth.c src/identity.c src/local_input.c
+SRC = src/main.c src/ui.c src/layout_view.c src/net.c src/lzc.c src/lzc_cli.c src/lzc_http.c src/wl_input.c src/config.c src/clipboard.c src/clipboard_image.c src/files.c src/tray.c src/autostart.c src/direct.c src/bluetooth.c src/identity.c src/local_input.c
 OBJ = $(SRC:src/%.c=build/%.o) $(PROTO_C:.c=.o)
 
 TRANSPORT = ../transport/target/release/liblzc_mesh_transport.a
@@ -35,7 +35,7 @@ build/%-client-protocol.h: protocols/%.xml | build
 	wayland-scanner client-header $< $@
 build/%-protocol.c: protocols/%.xml | build
 	wayland-scanner private-code $< $@
-build/%.o: src/%.c $(PROTO_H) src/*.h ../transport/include.h ../transport/input_gate.h $(ROOT)/.env | build
+build/%.o: src/%.c $(PROTO_H) src/*.h ../transport/include.h ../transport/input_gate.h ../transport/clipboard_png.h $(ROOT)/.env | build
 	$(CC) $(CFLAGS) -c $< -o $@
 build/%-protocol.o: build/%-protocol.c
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -64,7 +64,7 @@ pkg:
 	rm -rf build/pkg && mkdir -p build/pkg/src/linux ../dist
 	cp -r Makefile src protocols lzc-mesh.desktop lzc-mesh.png host-bluetooth.py BLUETOOTH.md HCLIENT-CLI.md build/pkg/src/linux/
 	mkdir -p build/pkg/src/transport
-	cp -r ../transport/Cargo.toml ../transport/Cargo.lock ../transport/include.h ../transport/input_gate.h ../transport/src build/pkg/src/transport/
+	cp -r ../transport/Cargo.toml ../transport/Cargo.lock ../transport/include.h ../transport/input_gate.h ../transport/clipboard_png.h ../transport/src build/pkg/src/transport/
 	# Preserve repository-relative paths for the same version preflight in makepkg.
 	mkdir -p build/pkg/src/lzc-mesh-client build/pkg/src/scripts
 	mv build/pkg/src/linux build/pkg/src/lzc-mesh-client/linux

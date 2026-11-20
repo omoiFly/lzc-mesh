@@ -2,7 +2,7 @@
 
 [简体中文](README.md) | English
 
-Control several computers in front of you (macOS, Windows, Linux) with one keyboard and trackpad/mouse. Only the cursor and keyboard are synced; no screen is streamed. It also offers a shared clipboard (text, on by default) and file sharing across devices. Devices talk to each other over the LazyCat network.
+Control several computers in front of you (macOS, Windows, Linux) with one keyboard and trackpad/mouse. Input relay syncs the cursor and keyboard. It also offers a shared clipboard and file sharing across devices. Devices talk to each other over the LazyCat network.
 
 **The Linux client supports Omarchy (Hyprland). Builds from the current source also support KDE Plasma 6.8 on EndeavourOS in a Wayland session.** Plasma support uses KWin fake input, layer-shell and ext-data-control.
 
@@ -21,7 +21,8 @@ Control several computers in front of you (macOS, Windows, Linux) with one keybo
 - Clients connect to the hub's WebSocket `/api/ws` over the LazyCat network.
 - Crossing a neighbouring screen edge requests control from the hub. With a healthy direct link, clients exchange pointer positions and input actions directly without waiting for the hub per event. Automatic mode relays input when direct connectivity is unavailable. The hub retains device trust, layout, control authorization and emergency-stop authority. Keys use Linux evdev codes on every platform.
 - While controlling another device, press Ctrl+Alt+Esc (Ctrl+Option+Esc on a Mac) to take control back immediately.
-- The shared clipboard is on by default and can be turned off under "Settings" on the management page or from a client's tray menu. It syncs text only, up to 256 KB. The hub relays it between the account's online devices and never stores it. Content that password managers mark as concealed is never synced.
+- The shared clipboard is on by default and can be turned off under "Settings" on the management page or from a client's tray menu. The hub relays it between the account's approved, running online devices. Content that password managers mark as concealed is never synced.
+- With the LPK and both desktop clients upgraded, you can copy a screenshot on one device and paste it on another. In Windows File Explorer, press Ctrl+V in the destination folder to save a received image as a PNG file. Images are transferred as PNG up to 7680 × 4320 (portrait also supported) and 32 MiB after compression. The hub automatically removes its temporary copy. For larger images, you can confirm sending the full-resolution image via file sharing. Older clients and the mobile web controller continue to support text.
 - File sharing: upload from the management page or an approved, running client; approved, running devices of the same account can download it. Files are stored on the box in `/lzcapp/var/files`, up to 4 GB each.
 
 ## Input transport and emergency pause

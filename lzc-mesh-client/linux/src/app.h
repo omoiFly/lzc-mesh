@@ -66,6 +66,7 @@ typedef struct {
     bool swap_cmd_ctrl;
     char *transport_mode;
     bool clipboard_enabled;
+    bool clipboard_image;
 
     // Local input role
     bool captured;    // this device controls another one

@@ -16,7 +16,7 @@ CXX="zig c++ -target x86_64-windows-gnu -std=c++17 -O2 -municode -DUNICODE -D_UN
 zig rc /fo build/lzc-mesh.res lzc-mesh.rc
 $CXX src/*.cpp build/lzc-mesh.res "$TRANSPORT" \
   -lbcrypt -lntdll -luserenv -lws2_32 -ldbghelp -lcrypt32 -lbthprops \
-  -lwinhttp -luser32 -lgdi32 -lshell32 -lole32 -lcomctl32 -ladvapi32 -lshcore -lshlwapi -lcomdlg32 -luxtheme \
+  -lwinhttp -luser32 -lgdi32 -lshell32 -lole32 -lcomctl32 -ladvapi32 -lshcore -lshlwapi -lcomdlg32 -luxtheme -lwindowscodecs -luuid \
   -o "build/LZC Mesh.exe"
 # The setup embeds the client exe built above as a resource.
 zig rc /fo build/setup.res setup/setup.rc

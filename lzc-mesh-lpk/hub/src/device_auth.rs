@@ -6,7 +6,7 @@ use subtle::ConstantTimeEq;
 
 pub(super) struct Challenge {
     pub id:String, pub name:String, pub platform:Platform, pub w:f64, pub h:f64, pub version:String,
-    pub public_key:String, pub nonce:String, pub created:Instant,
+    pub public_key:String, pub nonce:String, pub created:Instant, pub clipboard_image: bool,
 }
 impl Room {
     pub(super) fn trusted_conn(&self,c:&Conn) -> bool {
@@ -25,7 +25,7 @@ impl Room {
         if let Some(w)=self.device_watches.get(id) {w.send_replace(self.device_enabled(id));}
     }
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn device_hello(&mut self,conn:u64,id:String,name:String,platform:Platform,w:f64,h:f64,version:String,public_key:String) {
+    pub(super) fn device_hello(&mut self,conn:u64,id:String,name:String,platform:Platform,w:f64,h:f64,version:String,public_key:String,clipboard_image:bool) {
         let Some(c)=self.conns.get_mut(&conn) else{return};
         // A registered connection cannot switch identities or request fresh proofs
         // to reset its state. Reconnect explicitly to obtain another challenge.
@@ -37,7 +37,7 @@ impl Room {
             self.reply(conn,HubMsg::Error{message:"invalid device identity".into()});return;
         }
         let Ok(nonce)=identity::nonce() else{return};
-        c.challenge=Some(Challenge{id,name:name.chars().take(64).collect(),platform,w,h,version:version.chars().take(32).collect(),public_key,nonce:nonce.clone(),created:Instant::now()});
+        c.challenge=Some(Challenge{id,name:name.chars().take(64).collect(),platform,w,h,version:version.chars().take(32).collect(),public_key,nonce:nonce.clone(),created:Instant::now(),clipboard_image});
         self.reply(conn,HubMsg::DeviceChallenge{user:self.user.clone(),nonce});
     }
     pub(super) fn device_proof(&mut self,conn:u64,signature:String) {
@@ -60,6 +60,7 @@ impl Room {
             if let Some(c)=self.conns.get_mut(&conn){c.verified_key=None;}
             return;
         }
+        if let Some(c)=self.conns.get_mut(&conn) {c.clipboard_image=p.clipboard_image;}
         self.issue_device_auth(conn);
         self.update_lease(&p.id);
         self.broadcast_peers();
@@ -94,6 +95,7 @@ impl Room {
         let conns:Vec<u64>=self.conns.iter().filter(|(_,c)|c.device.as_deref()==Some(&id)).map(|(n,_)|*n).collect();
         for n in conns {
             if let Some(c)=self.conns.get_mut(&n) {c.direct=None;c.transport_status.clear();c.channel_status.clear();}
+            self.forget_image_connection(n);
             self.issue_device_auth(n);
         }
         self.update_lease(&id);
