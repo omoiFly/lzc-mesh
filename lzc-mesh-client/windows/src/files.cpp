@@ -28,6 +28,7 @@ std::wstring statusText = L"所有设备都能下载；下载到“下载”文�
 std::vector<SharedFile> current;
 std::atomic<bool> active{false};
 std::atomic<uint64_t> generation{0};
+std::atomic<uint64_t> imageGeneration{1};
 std::mutex activityMutex;
 struct Req;
 std::set<Req *> requests;
@@ -59,8 +60,12 @@ void postStatus(const std::wstring &text) {
 struct Req {
     HINTERNET s = nullptr, c = nullptr;
     std::atomic<HINTERNET> r{nullptr};
-    uint64_t ticket;
-    explicit Req(uint64_t epoch): ticket(epoch) { std::lock_guard<std::mutex> lock(activityMutex); requests.insert(this); }
+    uint64_t ticket, imageTicket;
+    explicit Req(uint64_t epoch, uint64_t imageEpoch = 0): ticket(epoch), imageTicket(imageEpoch) {
+        std::lock_guard<std::mutex> lock(activityMutex);
+        requests.insert(this);
+    }
+    bool current() const { return valid(ticket) && (!imageTicket || imageGeneration == imageTicket); }
     void cancel() { if (auto handle = r.exchange(nullptr)) WinHttpCloseHandle(handle); }
     ~Req() {
         std::lock_guard<std::mutex> lock(activityMutex);
@@ -68,17 +73,20 @@ struct Req {
         if (c) WinHttpCloseHandle(c); if (s) WinHttpCloseHandle(s);
     }
     bool open(const wchar_t *method, const std::wstring &host, const std::wstring &name, const std::wstring &cookie, const std::wstring &device, const std::wstring &token) {
-        if (!valid(ticket)) return false;
+        return openPath(method, host, L"/api/files/" + escape(name), cookie, device, token);
+    }
+    bool openPath(const wchar_t *method, const std::wstring &host, const std::wstring &path, const std::wstring &cookie, const std::wstring &device, const std::wstring &token) {
+        if (!current()) return false;
         s = WinHttpOpen(L"lzc-mesh-windows/" LZC_MESH_VERSION, WINHTTP_ACCESS_TYPE_NO_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
         if (!s) return false;
         WinHttpSetTimeouts(s, 15000, 15000, 120000, 120000);
         c = WinHttpConnect(s, host.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0);
         if (!c) return false;
-        auto handle = WinHttpOpenRequest(c, method, (L"/api/files/" + escape(name)).c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+        auto handle = WinHttpOpenRequest(c, method, path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
         if (!handle) return false;
         {
             std::lock_guard<std::mutex> lock(activityMutex);
-            if (!valid(ticket)) { WinHttpCloseHandle(handle); return false; }
+            if (!current()) { WinHttpCloseHandle(handle); return false; }
             r = handle;
         }
         DWORD noRedirect = WINHTTP_DISABLE_REDIRECTS;
@@ -90,6 +98,35 @@ struct Req {
         DWORD code = 0, len = sizeof code;
         WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code, &len, nullptr);
         return code;
+    }
+
+    bool sendImage(const ImageBytes &bytes) {
+        if (bytes.size() > MAXDWORD ||
+            !WinHttpSendRequest(r, L"Content-Type: image/png\r\n", DWORD(-1), WINHTTP_NO_REQUEST_DATA, 0, DWORD(bytes.size()), 0)) return false;
+        for (size_t offset = 0; offset < bytes.size();) {
+            const DWORD count = DWORD(std::min<size_t>(bytes.size() - offset, 64 * 1024));
+            DWORD written = 0;
+            if (!current() || !WinHttpWriteData(r, bytes.data() + offset, count, &written) || written != count) return false;
+            offset += written;
+        }
+        return current() && WinHttpReceiveResponse(r, nullptr);
+    }
+
+    DWORD readImageResponse(ImageBytes &bytes, size_t size) {
+        bytes.resize(size);
+        for (size_t offset = 0; offset < size;) {
+            const DWORD count = DWORD(std::min<size_t>(size - offset, 64 * 1024));
+            DWORD read = 0;
+            if (!current()) return ERROR_OPERATION_ABORTED;
+            if (!WinHttpReadData(r, bytes.data() + offset, count, &read)) return GetLastError();
+            if (!read) return ERROR_HANDLE_EOF;
+            offset += read;
+        }
+        uint8_t extra;
+        DWORD read = 0;
+        if (!current()) return ERROR_OPERATION_ABORTED;
+        if (!WinHttpReadData(r, &extra, 1, &read)) return GetLastError();
+        return read ? ERROR_INVALID_DATA : ERROR_SUCCESS;
     }
 };
 
@@ -282,6 +319,53 @@ bool ready() {
         return false;
     }
     return true;
+}
+
+void cancelClipboardRequests() {
+    std::lock_guard<std::mutex> lock(activityMutex);
+    ++imageGeneration;
+    for (auto *request : requests) if (request->imageTicket) request->cancel();
+}
+
+void requestClipboardImage(std::shared_ptr<const ImageBytes> png, const std::string &id, size_t size,
+                           std::function<void(ClipboardImageResponse)> complete) {
+    const auto path = id.empty() ? std::wstring(L"/api/clipboard/image") : L"/api/clipboard/image/" + widen(id);
+    std::thread([png = std::move(png), size, path, complete = std::move(complete), server = host(),
+                 cookie = widen(g.cookie), token = widen(g.fileToken),
+                 ticket = generation.load(), imageTicket = imageGeneration.load()] {
+        Req request(ticket, imageTicket);
+        const bool upload = bool(png);
+        const bool sent = request.openPath(upload ? L"PUT" : L"GET", server, path, cookie, deviceName(), token) &&
+            (upload ? request.sendImage(*png) :
+             WinHttpSendRequest(request.r, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)
+             && WinHttpReceiveResponse(request.r, nullptr));
+        ClipboardImageResponse response;
+        response.status = sent ? request.status() : 0;
+        if (!response.status) response.error = GetLastError();
+        else if (response.status == (upload ? 201u : 200u)) {
+            response.error = request.readImageResponse(response.body, upload ? 43 : size);
+            if (response.error) response.body.clear();
+        }
+        if (request.current()) complete(std::move(response));
+    }).detach();
+}
+
+void uploadClipboardImage(std::shared_ptr<const ImageBytes> png) {
+    if (!ready()) return;
+    GUID guid{};
+    if (FAILED(CoCreateGuid(&guid))) return;
+    wchar_t suffix[40]{};
+    if (!StringFromGUID2(guid, suffix, 40)) return;
+    std::wstring name = std::wstring(L"clipboard-") + std::wstring(suffix + 1, 36) + L".png";
+    std::thread([png = std::move(png), name = std::move(name), server = host(),
+                 cookie = widen(g.cookie), token = widen(g.fileToken), ticket = generation.load()] {
+        workerGeneration = ticket;
+        Req request(ticket);
+        postStatus(L"正在上传 " + name);
+        const bool sent = request.open(L"PUT", server, name, cookie, deviceName(), token) && request.sendImage(*png);
+        const DWORD status = sent ? request.status() : 0;
+        postStatus(status == 200 ? L"已上传 " + name : fmt(L"上传 %ls 失败（HTTP %lu）", name.c_str(), status));
+    }).detach();
 }
 
 void uploadPaths(const std::vector<std::wstring> &paths) {

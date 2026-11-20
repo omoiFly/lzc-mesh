@@ -104,7 +104,8 @@ void updateClipboardStatus() {
     if (g.hubConnected && !g.authVerified) setStatus(S_CLIPBOARD,L_UNKNOWN,L"设备未获信任，双向剪贴板已停用");
     else if (g.deviceReady && !g.deviceEnabled) setStatus(S_CLIPBOARD, L_UNKNOWN, L"客户端已关闭，双向剪贴板已停用");
     else if (!g.hubConnected) setStatus(S_CLIPBOARD, L_UNKNOWN, L"等待连接中枢");
-    else if (g.clipboardEnabled) setStatus(S_CLIPBOARD, L_OK, L"已开启：复制的文本会同步到其他在线设备");
+    else if (g.clipboardEnabled) setStatus(S_CLIPBOARD, L_OK, g.clipboardImage
+        ? L"已开启：同步文本和图片到支持的在线设备" : L"已开启：复制的文本会同步到其他在线设备");
     else setStatus(S_CLIPBOARD, L_UNKNOWN, L"已关闭（可在管理页面或托盘菜单中开启）");
 }
 
@@ -150,7 +151,7 @@ void sendHello() {
     DWORD n = 256;
     GetComputerNameExW(ComputerNamePhysicalDnsHostname, name, &n);
     hubws::send(JsonOut().s("t", g.authVerified ? "hello" : "device_hello").s("id", g.deviceId).s("name", narrow(name)).s("platform", "windows")
-                    .s("public_key", identity::publicKey()).n("w", g.screenW / g.dpiScale).n("h", g.screenH / g.dpiScale).s("version", LZC_MESH_VERSION).str());
+                    .s("public_key", identity::publicKey()).b("clipboard_image", true).n("w", g.screenW / g.dpiScale).n("h", g.screenH / g.dpiScale).s("version", LZC_MESH_VERSION).str());
 }
 
 void startProbe() {
@@ -246,6 +247,7 @@ void onHubText(const std::string &text, uint64_t nativeGeneration = 0) {
         refreshClientActivity(); updateControlStatus(); updateClipboardStatus();
         if (g.authVerified && !g.sharingEnabled) hubws::send(JsonOut().s("t","sharing").b("enabled",false).str());
     } else if (t == "welcome") {
+        g.clipboardImage = o["clipboard_image"].boolean();
         if (o["auth_version"].num()!=1) setStatus(S_TRUST,L_ERROR,L"需要支持设备凭证的新版中枢；共享保持停用");
         g.hubUser = o["user"].str();
         if (!o["id"].str().empty()) logLine(L"已加入 " + widen(g.hubUser) + L" 的设备组");
@@ -285,7 +287,10 @@ void onHubText(const std::string &text, uint64_t nativeGeneration = 0) {
             for (int key : {S_TRANSPORT, S_POINTER_CHANNEL, S_KEYBOARD_CHANNEL}) setStatus(key, L_OK, L"中枢转发 · 兼容旧版中枢");
         }
         bool clip = o["settings"]["clipboard"].boolean(true);
-        if (clip != g.clipboardEnabled) logLine(clip ? L"共享剪贴板已开启" : L"共享剪贴板已关闭");
+        if (clip != g.clipboardEnabled) {
+            clipboard::interruptImage();
+            logLine(clip ? L"共享剪贴板已开启" : L"共享剪贴板已关闭");
+        }
         g.clipboardEnabled = clip;
         updateClipboardStatus();
         setStatus(S_HUB, L_OK, fmt(L"已连接 · 用户 %ls · %d 台设备在线", widen(g.hubUser).c_str(), online));
@@ -295,6 +300,8 @@ void onHubText(const std::string &text, uint64_t nativeGeneration = 0) {
         input::setEdges(o["left"].boolean(), o["right"].boolean(), o["up"].boolean(), o["down"].boolean());
     } else if (t == "clipboard") {
         clipboard::set(o["text"].str(), o["from"].str());
+    } else if (t == "clipboard_image") {
+        clipboard::receiveImage(o["id"].str(), o["size"].num(), o["from"].str());
     } else if (t == "files") {
         std::vector<SharedFile> list;
         for (auto &f : o["files"].a) list.push_back(SharedFile{f["name"].str(), f["uploader"].str(), (long long)f["size"].num(), f["modified"].num()});
@@ -309,6 +316,7 @@ void onHubText(const std::string &text, uint64_t nativeGeneration = 0) {
 void onHubClosed(int httpStatus, const std::wstring &why) {
     bool was = g.hubConnected;
     g.hubConnected = false;
+    g.clipboardImage = false;
     g.nativeProtocol = false;
     g.deviceReady = false;
     g.authVerified = g.deviceTrusted = false; g.fileToken.clear();
@@ -574,6 +582,7 @@ LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_APP_PROBE: onProbe((Probe *)l); return 0;
     case WM_CLIPBOARDUPDATE: clipboard::onUpdate(); return 0;
+    case WM_APP_CLIPBOARD_IMAGE: clipboard::onImageResult(l); return 0;
     case WM_DROPFILES: files::onDrop((HDROP)w); return 0;
     case WM_NOTIFY: {
         NMHDR *n = (NMHDR *)l;
@@ -595,6 +604,7 @@ LRESULT CALLBACK wndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_APP_HUB_OPEN:
         if (!hubws::isCurrent(static_cast<unsigned>(w))) return 0;
         g.hubConnected = true;
+        g.clipboardImage = false;
         g.deviceReady = g.deviceTrusted = g.authVerified = false; g.fileToken.clear();
         refreshClientActivity();
         input::setHubConnected(true);
@@ -796,6 +806,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
             DispatchMessageW(&msg);
         }
     }
+    clipboard::stop();
     input::stop();
     receiver::shutdown();
     identity::shutdown();

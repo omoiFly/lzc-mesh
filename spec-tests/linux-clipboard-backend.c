@@ -5,9 +5,13 @@
 #include "clipboard.c"
 
 App app;
-bool app_operational(void) { return false; }
+static bool operational;
+static unsigned image_cancellations;
+bool app_operational(void) { return operational; }
 void app_log(const char *format, ...) {}
 void net_send_clipboard(const char *text) {}
+void clipboard_image_cancel(void) { image_cancellations++; }
+void clipboard_image_copy(int fd) { close(fd); }
 
 static int registry_token, seat_token, ext_token, wlr_token;
 static unsigned ext_binds, wlr_binds, ext_destroys;
@@ -69,4 +73,11 @@ int main(void) {
     advertise(wlr, 2, 2);
     assert(C.ext && C.manager == (struct wl_proxy *)&ext_token);
     assert(ext_binds == 1 && wlr_binds == 0 && ext_destroys == 0);
+
+    operational = app.clipboard_enabled = C.active = true;
+    C.device = (struct wl_proxy *)&ext_token;
+    remember("already copied");
+    clipboard_set("already copied", "peer");
+    assert(image_cancellations == 0);
+    g_clear_pointer(&C.last, g_free);
 }

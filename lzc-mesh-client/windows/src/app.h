@@ -57,6 +57,7 @@ enum {
     WM_APP_DIRECT,              // drain ordered native transport callbacks on the UI thread
     WM_APP_NET_LOG,             // bounded network diagnostics, no message contents
     WM_APP_RECEIVER,            // receiver::Notice*, presentation only
+    WM_APP_CLIPBOARD_IMAGE,
 };
 
 struct App {
@@ -71,6 +72,7 @@ struct App {
     bool swapCmdCtrl = true;
     bool autoCenter = true;
     bool clipboardEnabled = false;
+    bool clipboardImage = false;
     bool sharingEnabled = true;   // keyboard/mouse sharing switch (tray / header), persisted
     bool inputEnabled = true;     // account-wide keyboard/mouse pause
     bool deviceReady = false, deviceEnabled = true, deviceControl = false, deviceTrusted = false, authVerified = false;

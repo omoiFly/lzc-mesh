@@ -54,6 +54,7 @@ static const char *css =
     ".lzc textview, .lzc textview text { background: #ffffff; color: #404040; font-family: monospace; font-size: 11px; }"
     ".lzc list, .lzc row { background: #ffffff; }"
     ".lzc row { border-bottom: 1px solid #ececec; padding: 2px 0; }"
+    ".lzc label.file-name { color: #111111; }"
     ".lzc scrollbar { background: transparent; }";
 
 // ------------------------------------------------------------------ updates

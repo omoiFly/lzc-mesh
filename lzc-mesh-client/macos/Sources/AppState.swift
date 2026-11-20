@@ -158,7 +158,7 @@ final class AppState {
         if hubConnected && !authVerified { set(.clipboard, .unknown, "设备未获信任，双向剪贴板已停用") }
         else if clientReady && !clientEnabled { set(.clipboard, .unknown, "客户端已关闭，双向剪贴板已停用") }
         else if !hubConnected { set(.clipboard, .unknown, "等待连接中枢") }
-        else if clipboardEnabled { set(.clipboard, .ok, "已开启：复制的文本会同步到其他在线设备") }
+        else if clipboardEnabled { set(.clipboard, .ok, "已开启：剪贴板会同步到支持的在线设备") }
         else { set(.clipboard, .unknown, "已关闭（可在管理页面或菜单栏中开启）") }
     }
 

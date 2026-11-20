@@ -88,7 +88,7 @@ pub enum ClientMsg {
         #[serde(default)]
         version: String,
     },
-    DeviceHello { id: String, name: String, platform: Platform, w: f64, h: f64, #[serde(default)] version: String, public_key: String },
+    DeviceHello { id: String, name: String, platform: Platform, w: f64, h: f64, #[serde(default)] version: String, public_key: String, #[serde(default)] clipboard_image: bool },
     DeviceProof { signature: String },
     DeviceTrust { id: String, fingerprint: String, approved: bool },
     /// Account manager only; no persistent device or desktop client upgrade required.
@@ -141,6 +141,7 @@ pub enum ClientMsg {
     DirectStatus { status: String, #[serde(default)] channel: Option<String> },
     /// Local clipboard text changed on this device (sent only while sharing is enabled).
     Clipboard { text: String },
+    ClipboardImage { id: String },
     Ping,
 }
 
@@ -208,7 +209,7 @@ pub struct ActiveView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum HubMsg {
-    Welcome { id: String, user: String, auth_version: u32 },
+    Welcome { id: String, user: String, auth_version: u32, clipboard_image: bool },
     DeviceChallenge { user: String, nonce: String },
     DeviceAuth { status: String, fingerprint: String, #[serde(skip_serializing_if = "Option::is_none")] token: Option<String> },
     State { devices: Vec<DeviceView>, active: Option<ActiveView>, settings: Settings },
@@ -228,6 +229,7 @@ pub enum HubMsg {
     Leave,
     /// Clipboard text copied on another device; `from` is its display name.
     Clipboard { text: String, from: String },
+    ClipboardImage { id: String, size: usize, from: String },
     /// The shared file list changed.
     Files { files: Vec<FileView> },
     Pong,

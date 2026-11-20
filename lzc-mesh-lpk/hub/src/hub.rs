@@ -13,6 +13,8 @@ use crate::protocol::{ActiveView, ClientMsg, DeviceView, Dir, FileView, HubMsg, 
 use crate::store::{Device, Snapshot, Store};
 #[path = "device_auth.rs"]
 mod device_auth;
+#[path = "clipboard_images.rs"]
+pub(crate) mod clipboard_images;
 #[path = "mobile_controller.rs"]
 mod mobile_controller;
 use mobile_controller::web_source;
@@ -37,6 +39,7 @@ struct Conn {
     verified_key: Option<String>,
     challenge: Option<device_auth::Challenge>,
     file_token: Option<String>,
+    clipboard_image: bool,
     tx: Tx,
     /// Keyboard/mouse sharing switched on in the client (tray switch).
     sharing: bool,
@@ -68,6 +71,8 @@ pub struct Room {
     active: Option<Active>,
     device_watches: HashMap<String, watch::Sender<bool>>,
     web_lease: Option<std::time::Instant>,
+    images: HashMap<String, clipboard_images::Offer>,
+    image_sharing: watch::Sender<bool>,
 }
 
 #[derive(Clone)]
@@ -94,6 +99,8 @@ impl Hub {
                     active: None,
                     device_watches: HashMap::new(),
                     web_lease: None,
+                    images: HashMap::new(),
+                    image_sharing: watch::Sender::new(true),
                 }))
             })
             .clone()
@@ -106,13 +113,14 @@ fn norm(d: &Device, x: f64, y: f64) -> (f64, f64) {
 
 impl Room {
     pub fn attach(&mut self, conn: u64, tx: Tx) {
-        let _ = tx.send(HubMsg::Welcome { id: String::new(), user: self.user.clone(), auth_version: 1 });
-        self.conns.insert(conn, Conn { device: None, manager: false, native: false, verified_key: None, challenge: None, file_token: None, tx, sharing: true, direct: None, transport_status: String::new(), channel_status: HashMap::new() });
+        let _ = tx.send(HubMsg::Welcome { id: String::new(), user: self.user.clone(), auth_version: 1, clipboard_image: true });
+        self.conns.insert(conn, Conn { device: None, manager: false, native: false, verified_key: None, challenge: None, file_token: None, clipboard_image: false, tx, sharing: true, direct: None, transport_status: String::new(), channel_status: HashMap::new() });
         self.broadcast();
     }
 
     pub fn detach(&mut self, conn: u64) {
         let Some(old) = self.conns.remove(&conn) else { return };
+        self.forget_image_connection(conn);
         self.drop_device_from_active(&web_source(conn));
         if let Some(id) = old.device {
             if !self.is_online(&id) {
@@ -156,14 +164,14 @@ impl Room {
                     self.hello(conn,id,name,platform,w,h,version);self.broadcast();
                 } else if platform==Platform::Web && self.conns.get(&conn).is_some_and(|c|!c.native && c.device.is_none()) {
                     if let Some(c)=self.conns.get_mut(&conn){c.manager=true;}
-                    self.reply(conn, HubMsg::Welcome { id: web_source(conn), user: self.user.clone(), auth_version: 1 });
+                    self.reply(conn, HubMsg::Welcome { id: web_source(conn), user: self.user.clone(), auth_version: 1, clipboard_image: true });
                     self.broadcast();
                 } else {
                     if platform!=Platform::Web {if let Some(c)=self.conns.get_mut(&conn){c.native=true;}}
                     self.reply(conn,HubMsg::Error{message:"device credentials required; upgrade this client".into()});
                 }
             }
-            ClientMsg::DeviceHello{id,name,platform,w,h,version,public_key} => self.device_hello(conn,id,name,platform,w,h,version,public_key),
+            ClientMsg::DeviceHello{id,name,platform,w,h,version,public_key,clipboard_image} => self.device_hello(conn,id,name,platform,w,h,version,public_key,clipboard_image),
             ClientMsg::DeviceProof{signature} => self.device_proof(conn,signature),
             ClientMsg::DeviceTrust{id,fingerprint,approved} => self.device_trust(conn,id,fingerprint,approved),
             ClientMsg::Ping => self.reply(conn, HubMsg::Pong),
@@ -192,6 +200,10 @@ impl Room {
                         c.direct = None;
                         c.transport_status.clear(); c.channel_status.clear();
                     }
+                    let connections: Vec<_> = self.conns.iter().filter_map(|(&conn, client)| {
+                        (client.device.as_deref() == Some(&id)).then_some(conn)
+                    }).collect();
+                    for conn in connections { self.forget_image_connection(conn); }
                     self.store.save(&self.user, &self.snapshot);
                     self.broadcast_peers();
                 }
@@ -211,7 +223,11 @@ impl Room {
                     self.snapshot.settings.swap_cmd_ctrl = v;
                 }
                 if let Some(v) = clipboard {
-                    self.snapshot.settings.clipboard = v;
+                    if self.snapshot.settings.clipboard != v {
+                        self.snapshot.settings.clipboard = v;
+                        self.image_sharing.send_replace(v);
+                        if !v { self.images.clear(); }
+                    }
                 }
                 if let Some(v) = transport_mode {
                     self.snapshot.settings.transport_mode = v;
@@ -281,6 +297,7 @@ impl Room {
                     self.clipboard(&id, text);
                 }
             }
+            ClientMsg::ClipboardImage { id } => self.offer_image(conn, &id),
             other => {
                 let source = device.or_else(|| self.conns.get(&conn).filter(|c| c.manager).map(|_| web_source(conn)));
                 if let Some(id) = source { self.input(&id, other); }
@@ -319,17 +336,20 @@ impl Room {
         // Only a proved matching key reaches this method. Retire an older
         // connection so a reconnect cannot duplicate input or keep old tokens.
         let fingerprint=self.auth_status(&id).1;
+        let mut retired = Vec::new();
         for (n,c) in &mut self.conns {
             if *n!=conn && c.device.as_deref()==Some(&id) {
+                retired.push(*n);
                 let _=c.tx.send(HubMsg::DeviceAuth{status:"replaced".into(),fingerprint:fingerprint.clone(),token:None});
                 c.device=None;c.verified_key=None;c.file_token=None;c.direct=None;
                 c.transport_status.clear();c.channel_status.clear();
             }
         }
+        for conn in retired { self.forget_image_connection(conn); }
         self.drop_device_from_active(&id);
         if let Some(c) = self.conns.get_mut(&conn) {
             c.device = Some(id.clone());
-            let _ = c.tx.send(HubMsg::Welcome { id, user: self.user.clone(), auth_version: 1 });
+            let _ = c.tx.send(HubMsg::Welcome { id, user: self.user.clone(), auth_version: 1, clipboard_image: true });
         }
         // Registration publishes state only after the connection token is issued.
         true
@@ -758,7 +778,7 @@ mod tests {
     pub fn room() -> Room {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let dir = std::env::temp_dir().join(format!("lzc-mesh-test-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-        let mut r=Room { user: "u".into(), store: Store::new(dir), snapshot: Snapshot::default(), conns: HashMap::new(), active: None, device_watches: HashMap::new(), web_lease: None };
+        let mut r=Room { user: "u".into(), store: Store::new(dir), snapshot: Snapshot::default(), conns: HashMap::new(), active: None, device_watches: HashMap::new(), web_lease: None, images: HashMap::new(), image_sharing: watch::Sender::new(true) };
         // Existing routing tests explicitly exercise edge-preserving mode.
         // Auto-center/default migration behavior has dedicated regressions.
         r.snapshot.settings.auto_center = false;
@@ -776,7 +796,7 @@ mod tests {
         let stored=keys.entry(id.to_string()).or_insert_with(||crate::identity::DeviceIdentity::generate().unwrap().export()).clone();
         drop(keys);
         let key=crate::identity::DeviceIdentity::from_stored(&stored).unwrap();
-        r.handle(conn,ClientMsg::DeviceHello{id:id.into(),name:id.into(),platform,w,h,version:String::new(),public_key:key.public_key()});
+        r.handle(conn,ClientMsg::DeviceHello{id:id.into(),name:id.into(),platform,w,h,version:String::new(),public_key:key.public_key(),clipboard_image:false});
         let nonce=r.conns[&conn].challenge.as_ref().unwrap().nonce.clone();
         r.handle(conn,ClientMsg::DeviceProof{signature:key.proof(&r.user,id,&nonce)});
         r.handle(0,ClientMsg::DeviceTrust{id:id.into(),fingerprint:key.fingerprint(),approved:true});

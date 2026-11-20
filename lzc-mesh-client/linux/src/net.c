@@ -6,6 +6,7 @@
 #include "app.h"
 #include "direct.h"
 #include "clipboard.h"
+#include "clipboard_image.h"
 #include "files.h"
 #include "lzc.h"
 #include "net.h"
@@ -26,7 +27,7 @@ bool net_busy(void) { return connecting; }
 static bool message_allowed(JsonObject *o) {
     if (app_operational()) return true;
     const char *type = json_object_get_string_member_with_default(o, "t", "");
-    const char *shared[] = {"edge", "motion", "button", "key", "wheel", "clipboard", "layout", "forget", "direct_begin", "direct_relay", "direct_route", "direct_legacy"};
+    const char *shared[] = {"edge", "motion", "button", "key", "wheel", "clipboard", "clipboard_image", "layout", "forget", "direct_begin", "direct_relay", "direct_route", "direct_legacy"};
     for (guint i = 0; i < G_N_ELEMENTS(shared); i++) if (!strcmp(type, shared[i])) return false;
     return true;
 }
@@ -64,6 +65,7 @@ void net_send_hello(void) {
     char *name = g_strdup(g_get_host_name());
     JsonBuilder *b = msg(app.auth_verified?"hello":"device_hello");
     str(b,"public_key",identity_public());
+    boolean(b, "clipboard_image", clipboard_available());
     str(b, "id", app.device_id);
     str(b, "name", name);
     str(b, "platform", "linux");
@@ -95,6 +97,7 @@ void net_send_forget(const char *id) { JsonBuilder *b = msg("forget"); str(b, "i
 void net_send_transport_mode(const char *mode) { JsonBuilder *b = msg("settings"); str(b, "transport_mode", mode); done(b); }
 void net_send_settings(bool swap) { JsonBuilder *b = msg("settings"); boolean(b, "swap_cmd_ctrl", swap); done(b); }
 void net_send_clipboard(const char *text) { JsonBuilder *b = msg("clipboard"); str(b, "text", text); done(b); }
+void net_send_clipboard_image(const char *id) { JsonBuilder *b = msg("clipboard_image"); str(b, "id", id); done(b); }
 void net_send_enabled(const char *id, bool on) { JsonBuilder *b = msg("device_enabled"); str(b, "id", id); boolean(b, "enabled", on); done(b); }
 void net_send_sharing(bool on) { JsonBuilder *b = msg("sharing"); boolean(b, "enabled", on); done(b); }
 void net_send_clipboard_setting(bool on) { JsonBuilder *b = msg("settings"); boolean(b, "clipboard", on); done(b); }
@@ -104,7 +107,8 @@ static void update_clipboard_status(void) {
     else if (app.device_ready && !app.device_enabled) app_set_status(S_CLIPBOARD, ST_UNKNOWN, "客户端已关闭，双向剪贴板已停用");
     else if (!clipboard_available()) app_set_status(S_CLIPBOARD, ST_WARN, "当前合成器不支持 Wayland data-control，无法共享剪贴板");
     else if (!app.hub_connected) app_set_status(S_CLIPBOARD, ST_UNKNOWN, "等待连接中枢");
-    else if (app.clipboard_enabled) app_set_status(S_CLIPBOARD, ST_OK, "已开启：复制的文本会同步到其他在线设备");
+    else if (app.clipboard_enabled) app_set_status(S_CLIPBOARD, ST_OK, app.clipboard_image
+        ? "已开启：同步文本和图片到支持的在线设备" : "已开启：复制的文本会同步到其他在线设备");
     else app_set_status(S_CLIPBOARD, ST_UNKNOWN, "已关闭（可在管理页面或托盘菜单中开启）");
 }
 
@@ -190,7 +194,10 @@ static void on_state(JsonObject *o) {
         g_free(app.transport_mode);
         app.transport_mode = g_strdup(json_object_get_string_member_with_default(so, "transport_mode", "auto"));
         bool clip = json_object_get_boolean_member_with_default(so, "clipboard", true);
-        if (clip != app.clipboard_enabled) app_log("共享剪贴板已%s", clip ? "开启" : "关闭");
+        if (clip != app.clipboard_enabled) {
+            clipboard_image_cancel();
+            app_log("共享剪贴板已%s", clip ? "开启" : "关闭");
+        }
         app.clipboard_enabled = clip;
     }
     app_refresh_activity();
@@ -238,6 +245,8 @@ void net_inject(JsonObject *o) {
         update_control_status();
     } else if (!strcmp(t, "state")) on_state(o);
     else if (!strcmp(t, "welcome")) {
+        app.clipboard_image = json_object_get_boolean_member_with_default(o, "clipboard_image", false);
+        update_clipboard_status();
         if(json_object_get_int_member_with_default(o,"auth_version",0)!=1)app_set_status(S_TRUST,ST_ERROR,"需要支持设备凭证的新版中枢；共享保持停用");
         const char *user = json_object_get_string_member_with_default(o, "user", "");
         g_free(app.hub_user);
@@ -302,6 +311,10 @@ void net_inject(JsonObject *o) {
     } else if (!strcmp(t, "clipboard")) {
         if (app.clipboard_enabled)
             clipboard_set(json_object_get_string_member_with_default(o, "text", ""), json_object_get_string_member_with_default(o, "from", ""));
+    } else if (!strcmp(t, "clipboard_image")) {
+        clipboard_image_download(json_object_get_string_member_with_default(o, "id", ""),
+            json_object_get_int_member_with_default(o, "size", 0),
+            json_object_get_string_member_with_default(o, "from", ""));
     } else if (!strcmp(t, "error")) {
         app_log("服务端错误：%s", json_object_get_string_member_with_default(o, "message", ""));
     }
@@ -324,6 +337,7 @@ static void on_message(SoupWebsocketConnection *c, gint type, GBytes *data, gpoi
 }
 
 static void reset_roles(void) {
+    app.clipboard_image = false;
     g_clear_pointer(&app.source_control_id,g_free);
     if (app.captured) wl_input_capture(false);
     if (app.controlled) wl_input_leave();

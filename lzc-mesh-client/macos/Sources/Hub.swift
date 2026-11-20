@@ -54,6 +54,7 @@ final class Hub: NSObject, URLSessionWebSocketDelegate {
         connecting = false
         let s = AppState.shared
         s.hubConnected = true
+        clipboard.imageSupported = false
         s.authVerified = false; s.fileToken = ""; s.updateClientState(nil)
         s.set(.hub, .ok, "已连接")
         s.log("已连接设备接力中枢")
@@ -114,7 +115,7 @@ final class Hub: NSObject, URLSessionWebSocketDelegate {
     }
 
     func send(_ obj: [String: Any]) {
-        if !AppState.shared.operational && ["edge", "motion", "button", "wheel", "key", "clipboard", "layout", "forget"].contains(obj["t"] as? String ?? "") { return }
+        if !AppState.shared.operational && ["edge", "motion", "button", "wheel", "key", "clipboard", "clipboard_image", "layout", "forget"].contains(obj["t"] as? String ?? "") { return }
         var outgoing = obj
         if !sourceControlID.isEmpty && ["motion", "key", "button", "wheel", "release"].contains(obj["t"] as? String ?? "") {
             outgoing["_control_session"] = sourceControlID
@@ -139,7 +140,7 @@ final class Hub: NSObject, URLSessionWebSocketDelegate {
         guard let identity else { return }
         if !s.authVerified { s.set(.deviceTrust, .unknown, "等待批准 · 指纹 \(identity.fingerprint)") }
         send(["t": s.authVerified ? "hello" : "device_hello", "id": s.deviceID, "name": Host.current().localizedName ?? "Mac", "platform": "macos",
-              "w": s.screenW, "h": s.screenH, "version": AppState.version, "public_key": identity.publicKey])
+              "w": s.screenW, "h": s.screenH, "version": AppState.version, "public_key": identity.publicKey, "clipboard_image": true])
         if s.authVerified && !s.sharingEnabled { send(["t": "sharing", "enabled": false]) }
     }
 
@@ -174,7 +175,7 @@ final class Hub: NSObject, URLSessionWebSocketDelegate {
         let accepted = scope.withCString { begin ? mesh_input_gate_begin(&inputGate, $0) : mesh_input_gate_accept(&inputGate, $0) }
         guard accepted else { return }
         if scope.isEmpty && !blockedControlID.isEmpty && blockedControlID == activeControlID && ["capture", "enter", "move", "button", "key", "wheel"].contains(t) { return }
-        if !s.operational && ["capture", "enter", "move", "button", "wheel", "key", "clipboard", "files"].contains(t) { return }
+        if !s.operational && ["capture", "enter", "move", "button", "wheel", "key", "clipboard", "clipboard_image", "files"].contains(t) { return }
         switch t {
         case "device_challenge":
             guard let identity, let user = o["user"] as? String, user == s.hubUser,
@@ -194,6 +195,7 @@ final class Hub: NSObject, URLSessionWebSocketDelegate {
             if !s.authVerified { direct.disconnected() }
             if s.authVerified && !s.sharingEnabled { sendRaw(["t": "sharing", "enabled": false]) }
         case "welcome":
+            clipboard.imageSupported = o["clipboard_image"] as? Bool ?? false
             if o["auth_version"] as? Int != 1 { s.set(.deviceTrust, .error, "需要支持设备凭证的新版中枢；共享保持停用") }
             s.hubUser = o["user"] as? String ?? ""
             if !(o["id"] as? String ?? "").isEmpty { s.log("已加入 \(s.hubUser) 的设备组") }
@@ -223,7 +225,10 @@ final class Hub: NSObject, URLSessionWebSocketDelegate {
                 s.save()
             }
             let clip = settings?["clipboard"] as? Bool ?? true
-            if clip != s.clipboardEnabled { s.log("共享剪贴板已\(clip ? "开启" : "关闭")") }
+            if clip != s.clipboardEnabled {
+                clipboard.interruptImage()
+                s.log("共享剪贴板已\(clip ? "开启" : "关闭")")
+            }
             s.clipboardEnabled = clip
             s.updateClipboardStatus()
             s.set(.hub, .ok, "已连接 · 用户 \(s.hubUser) · \(s.devices.filter { $0.online }.count) 台设备在线")
@@ -287,6 +292,8 @@ final class Hub: NSObject, URLSessionWebSocketDelegate {
             input.key(code, down: down)
         case "clipboard":
             clipboard.set(o["text"] as? String ?? "", from: o["from"] as? String ?? "")
+        case "clipboard_image":
+            clipboard.receiveImage(o["id"] as? String ?? "", size: o["size"] as? Int ?? 0, from: o["from"] as? String ?? "")
         case "files":
             s.files = (o["files"] as? [[String: Any]] ?? []).map {
                 SharedFile(name: $0["name"] as? String ?? "", size: ($0["size"] as? NSNumber)?.int64Value ?? 0,

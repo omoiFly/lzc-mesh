@@ -5,7 +5,7 @@ use super::tests_support::{hello,room};
 fn read(rx:&mut mpsc::UnboundedReceiver<HubMsg>)->Vec<HubMsg>{let mut out=vec![];while let Ok(v)=rx.try_recv(){out.push(v)}out}
 fn register(r:&mut Room,conn:u64,id:&str,key:&DeviceIdentity)->mpsc::UnboundedReceiver<HubMsg>{
     let(tx,rx)=mpsc::unbounded_channel();r.attach(conn,tx);
-    r.handle(conn,ClientMsg::DeviceHello{id:id.into(),name:id.into(),platform:Platform::Windows,w:1000.0,h:800.0,version:"0.2.0".into(),public_key:key.public_key()});
+    r.handle(conn,ClientMsg::DeviceHello{id:id.into(),name:id.into(),platform:Platform::Windows,w:1000.0,h:800.0,version:"0.2.0".into(),public_key:key.public_key(),clipboard_image:false});
     let nonce=r.conns[&conn].challenge.as_ref().unwrap().nonce.clone();
     r.handle(conn,ClientMsg::DeviceProof{signature:key.proof(&r.user,id,&nonce)});rx
 }
@@ -44,7 +44,7 @@ fn token(rx:&mut mpsc::UnboundedReceiver<HubMsg>)->String{read(rx).into_iter().f
     assert!(r.active.is_some());assert!(r.conns[&9].device.is_none());assert!(r.trusted_conn(&r.conns[&2]));
     assert_eq!(geometry,(r.devices()["win"].x,r.devices()["win"].y));
     let(tx,mut rx)=mpsc::unbounded_channel();r.attach(10,tx);
-    r.handle(10,ClientMsg::DeviceHello{id:"win".into(),name:"spoof".into(),platform:Platform::Windows,w:1000.0,h:800.0,version:String::new(),public_key:key.public_key()});
+    r.handle(10,ClientMsg::DeviceHello{id:"win".into(),name:"spoof".into(),platform:Platform::Windows,w:1000.0,h:800.0,version:String::new(),public_key:key.public_key(),clipboard_image:false});
     let nonce=r.conns[&10].challenge.as_ref().unwrap().nonce.clone();
     let wrong=key.proof("other-account","win",&nonce);
     r.handle(10,ClientMsg::DeviceProof{signature:wrong});
@@ -52,7 +52,7 @@ fn token(rx:&mut mpsc::UnboundedReceiver<HubMsg>)->String{read(rx).into_iter().f
     assert!(r.conns[&10].device.is_none());assert!(r.active.is_some());
     assert!(read(&mut rx).iter().any(|v|matches!(v,HubMsg::Error{..})));
     let(tx,_rx)=mpsc::unbounded_channel();r.attach(11,tx);
-    r.handle(11,ClientMsg::DeviceHello{id:"win".into(),name:"expired".into(),platform:Platform::Windows,w:1000.0,h:800.0,version:String::new(),public_key:key.public_key()});
+    r.handle(11,ClientMsg::DeviceHello{id:"win".into(),name:"expired".into(),platform:Platform::Windows,w:1000.0,h:800.0,version:String::new(),public_key:key.public_key(),clipboard_image:false});
     let p=r.conns.get_mut(&11).unwrap().challenge.as_mut().unwrap();p.created=std::time::Instant::now()-std::time::Duration::from_secs(31);
     let nonce=p.nonce.clone();r.handle(11,ClientMsg::DeviceProof{signature:key.proof(&r.user,"win",&nonce)});
     assert!(r.conns[&11].device.is_none());assert!(r.active.is_some());

@@ -127,18 +127,23 @@ static void on_delete(GtkButton *button, gpointer unused) {
     SoupMessage *message = request("DELETE", name);
     soup_session_send_and_read_async(http(), message, G_PRIORITY_DEFAULT, job->cancel, mutation_done, job); g_object_unref(message);
 }
-static void upload_file(GFile *file) {
+void files_upload_named(GFile *file, const char *name) {
     if (!ready()) return;
     GError *error = NULL;
     GFileInfo *info = g_file_query_info(file, G_FILE_ATTRIBUTE_STANDARD_SIZE, 0, cancellation, &error);
     GFileInputStream *in = info ? g_file_read(file, cancellation, &error) : NULL;
     if (!in) { set_status("无法读取文件：%s", error ? error->message : "?"); g_clear_error(&error); if (info) g_object_unref(info); return; }
-    char *name = g_file_get_basename(file); Job *job = job_new(name);
+    Job *job = job_new(name);
     SoupMessage *message = request("PUT", name);
     soup_message_set_request_body(message, "application/octet-stream", G_INPUT_STREAM(in), g_file_info_get_size(info));
     set_status("正在上传 %s…", name);
     soup_session_send_and_read_async(http(), message, G_PRIORITY_DEFAULT, job->cancel, mutation_done, job);
-    g_object_unref(message); g_object_unref(in); g_object_unref(info); g_free(name);
+    g_object_unref(message); g_object_unref(in); g_object_unref(info);
+}
+static void upload_file(GFile *file) {
+    char *name = g_file_get_basename(file);
+    files_upload_named(file, name);
+    g_free(name);
 }
 static void chooser_done(GObject *src, GAsyncResult *result, gpointer data) {
     GListModel *files = gtk_file_dialog_open_multiple_finish(GTK_FILE_DIALOG(src), result, NULL);
@@ -188,6 +193,8 @@ void files_update(JsonArray *array) {
         char *meta = g_strdup_printf("%s · %s · %s", size, *from ? from : "-", when);
         GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8), *label = gtk_label_new(name), *detail = gtk_label_new(meta);
         gtk_label_set_xalign(GTK_LABEL(label), 0); gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE); gtk_widget_set_hexpand(label, TRUE);
+        gtk_widget_add_css_class(label, "file-name");
+        gtk_widget_set_tooltip_text(label, name);
         gtk_widget_add_css_class(detail, "muted");
         GtkWidget *download = gtk_button_new_with_label("下载"), *remove = gtk_button_new_with_label("删除");
         g_object_set_data_full(G_OBJECT(download), "name", g_strdup(name), g_free); g_object_set_data_full(G_OBJECT(remove), "name", g_strdup(name), g_free);

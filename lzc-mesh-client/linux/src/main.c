@@ -1,5 +1,6 @@
 // Entry point, shared state helpers and the periodic LazyCat/hub supervisor.
 #include <gtk/gtk.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <string.h>
 
@@ -168,6 +169,7 @@ static void activate(GtkApplication *gtk_app, gpointer data) {
 }
 
 int main(int argc, char **argv) {
+    signal(SIGPIPE, SIG_IGN);
     for (int i = 0; i < S_COUNT; i++) app.status[i] = (Status){ST_UNKNOWN, g_strdup("检测中…")};
     app.devices = g_ptr_array_new();
     app.swap_cmd_ctrl = true;

@@ -21,7 +21,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::extract::DefaultBodyLimit;
-use axum::routing::get;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use axum::serve::ListenerExt;
 use futures_util::{SinkExt, StreamExt};
@@ -42,6 +42,7 @@ static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 pub struct App {
     pub hub: Hub,
     pub files: Files,
+    image_slots: std::sync::Arc<tokio::sync::Semaphore>,
 }
 
 pub fn user_of(headers: &HeaderMap) -> Option<String> {
@@ -148,12 +149,14 @@ async fn main() {
     let addr: SocketAddr = std::env::var("LZC_MESH_LISTEN").unwrap_or_else(|_| "0.0.0.0:8080".into()).parse().expect("listen address");
 
     let files_dir = PathBuf::from(std::env::var("LZC_MESH_FILES").unwrap_or_else(|_| "/lzcapp/var/files".into()));
-    let app = App { hub: Hub::new(Store::new(data)), files: Files::new(files_dir) };
+    let app = App { hub: Hub::new(Store::new(data)), files: Files::new(files_dir), image_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(8)) };
     let router = Router::new()
         .route("/api/whoami", get(whoami))
         .route("/api/ws", get(ws))
         .route("/api/health", get(|| async { "ok" }))
         .route("/api/files", get(files_api::list))
+        .route("/api/clipboard/image", put(hub::clipboard_images::upload))
+        .route("/api/clipboard/image/{id}", get(hub::clipboard_images::download))
         .route(
             "/api/files/{name}",
             get(files_api::download).put(files_api::upload).delete(files_api::remove).layer(DefaultBodyLimit::disable()),
